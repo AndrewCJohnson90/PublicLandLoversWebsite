@@ -1,0 +1,37 @@
+---
+const year = new Date().getFullYear();
+---
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div>
+      <p class="coord">PUBLICLANDLOVERS.COM &middot; PUBLIC LANDS, GIS &amp; VAN LIFE FIELD NOTES</p>
+      <p class="coord">&copy; {year} Public Land Lovers &middot; a project of Orovada Consulting LLC</p>
+    </div>
+    <div class="footer-links">
+      <a href="/links/">Follow</a>
+      <a href="/work-with-us/">Work With Us</a>
+      <a href="mailto:hello@publiclandlovers.com">hello@publiclandlovers.com</a>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    border-top: 1px solid var(--line);
+    padding: 2.5rem 0;
+    background: var(--paper-dark);
+  }
+  .footer-inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .footer-links {
+    display: flex;
+    gap: 1.2rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+  }
+</style>

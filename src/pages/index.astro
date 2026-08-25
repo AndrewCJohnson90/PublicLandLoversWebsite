@@ -1,0 +1,144 @@
+---
+import Base from '../layouts/Base.astro';
+import Contour from '../components/Contour.astro';
+import { getCollection } from 'astro:content';
+
+const articles = (await getCollection('articles'))
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+  .slice(0, 3);
+const maps = (await getCollection('maps')).slice(0, 2);
+---
+<Base title="Public Land Lovers">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">39.5&deg;N, 105.7&deg;W &mdash; American West</p>
+        <h1>The public lands are ours to know, use, and defend.</h1>
+        <p class="hero-sub">
+          Field notes, original mapping, and van life dispatches from the
+          BLM lands, national parks, and state parks of the American West.
+          Built by people who also do this for a living.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-solid" href="/maps/">Explore the maps</a>
+          <a class="btn" href="/articles/">Read the field notes</a>
+        </div>
+      </div>
+    </div>
+    <Contour variant="hero" tone="light" />
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Field Notes</p>
+        <h2>Latest articles</h2>
+      </div>
+      <div class="grid-3">
+        {articles.map((a) => (
+          <a class="card article-card" href={`/articles/${a.id}/`}>
+            <p class="coord">{a.data.pubDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+            <h3>{a.data.title}</h3>
+            <p>{a.data.description}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <Contour variant="divider" tone="light" />
+
+  <section class="section section-dark">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Interactive Mapping</p>
+        <h2>Maps built from the field, not from stock data</h2>
+      </div>
+      <div class="grid-2">
+        {maps.map((m) => (
+          <a class="card map-card" href={`/maps/${m.id}/`}>
+            <h3>{m.data.title}</h3>
+            <p>{m.data.description}</p>
+            {m.data.region && <p class="coord">{m.data.region}</p>}
+          </a>
+        ))}
+      </div>
+      <p class="section-cta"><a class="btn" href="/maps/">See all maps &rarr;</a></p>
+    </div>
+  </section>
+
+  <section class="section signup">
+    <div class="wrap signup-grid">
+      <div>
+        <p class="eyebrow">Stay in the loop</p>
+        <h2>One list, no algorithm.</h2>
+        <p>New maps, new field notes, and trip dispatches &mdash; straight to your inbox, nowhere else.</p>
+      </div>
+      <form class="signup-form" name="signup">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" placeholder="you@example.com" required />
+        <button class="btn btn-solid" type="submit">Join the list</button>
+      </form>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero {
+    position: relative;
+    padding-top: 5rem;
+    overflow: hidden;
+  }
+  .hero-grid { position: relative; z-index: 2; max-width: 46rem; padding-bottom: 3rem; }
+  .hero-sub { font-size: 1.15rem; color: var(--ink-soft); max-width: 38rem; }
+  .hero-actions { display: flex; gap: 1rem; margin-top: 1.5rem; flex-wrap: wrap; }
+
+  .section-head { max-width: 34rem; margin-bottom: 2.2rem; }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+  .article-card, .map-card {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+  }
+  .article-card:hover, .map-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--rust);
+    text-decoration: none;
+  }
+  .section-dark .map-card {
+    background: var(--dusk-dark);
+    border-color: rgba(255,255,255,0.12);
+  }
+  .section-dark .map-card:hover { border-color: var(--ochre); }
+  .section-cta { margin-top: 1.75rem; }
+
+  .signup-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 2rem;
+    align-items: center;
+  }
+  .signup-form {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .signup-form input { max-width: 16rem; }
+
+  @media (max-width: 900px) {
+    .grid-3, .grid-2 { grid-template-columns: 1fr; }
+    .signup-grid { grid-template-columns: 1fr; }
+  }
+</style>
