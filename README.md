@@ -16,6 +16,7 @@ npm run dev        # http://localhost:4321
 
 ```bash
 npm run build       # outputs to /dist
+
 npm run preview     # preview the production build locally
 ```
 

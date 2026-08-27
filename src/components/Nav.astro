@@ -10,7 +10,7 @@ const links = [
 <header class="nav">
   <div class="wrap nav-inner">
     <a href="/" class="brand">
-      <span class="brand-mark">PLL</span>
+      <img class="brand-mark" src="/images/brand-avatar.jpg" alt="Public Land Lovers" width="40" height="40" />
       <span class="brand-name">Public Land Lovers</span>
     </a>
     <nav aria-label="Primary">
@@ -47,12 +47,12 @@ const links = [
   }
   .brand:hover { text-decoration: none; }
   .brand-mark {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
-    border: 1px solid var(--ink);
-    padding: 0.15rem 0.4rem;
-    border-radius: 2px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1.5px solid var(--ink);
+    flex-shrink: 0;
   }
   .brand-name {
     font-family: var(--font-display);
