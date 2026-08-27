@@ -1,8 +1,8 @@
 ---
 title: "LiDAR-to-REM Stream Restoration Assessment"
 description: "A relative elevation model built from LiDAR to evaluate stream restoration sites, showing floodplain connectivity at a glance."
-embedUrl: "https://www.arcgis.com/apps/instant/media/index.html?appid=REPLACE_WITH_YOUR_APP_ID"
+embedUrl: "https://experience.arcgis.com/experience/75e15b0fff54472c93ca174e7edd143c/"
 region: "Pacific Northwest"
 ---
 
-Swap `embedUrl` in the frontmatter for your actual AGOL web app share URL.
+Replace this with real write-up copy about the stream restoration assessment — methodology, what the REM reveals, and any findings worth calling out.
