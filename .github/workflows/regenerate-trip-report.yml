@@ -1,0 +1,47 @@
+name: Regenerate VanLife trip report
+
+# Runs on a schedule, and can also be triggered manually from the
+# Actions tab (Run workflow button) right after editing the feature
+# service, if you don't want to wait for the next scheduled run.
+on:
+  schedule:
+    # Every 6 hours. Adjust the cron expression if you want it more
+    # or less frequent — e.g. '0 * * * *' for hourly.
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+# Needed so the workflow can push the regenerated file back to the repo.
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Generate trip report
+        run: >
+          python scripts/generate_public_land_lovers_trip_report.py
+          --output public/VanLife
+
+      - name: Commit and push if the report changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/VanLife
+          if git diff --cached --quiet; then
+            echo "No changes to the trip report — nothing to commit."
+          else
+            git commit -m "Auto-regenerate VanLife trip report"
+            git push
+          fi
