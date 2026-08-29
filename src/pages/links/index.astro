@@ -1,30 +1,36 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
 
 const links = [
-  { label: 'Instagram', href: 'https://instagram.com/publiclandlovers', note: 'Daily field photos & stories' },
-  { label: 'TikTok', href: 'https://tiktok.com/@publiclandlovers', note: 'Short-form trip clips' },
-  { label: 'YouTube', href: 'https://youtube.com/@publiclandlovers', note: 'Long-form trip breakdowns' },
-  { label: 'Facebook', href: 'https://facebook.com/publiclandlovers', note: 'Community & advocacy updates' },
-];
+  { label: 'Instagram', icon: 'instagram', href: 'https://instagram.com/publiclandlovers', note: 'Reels of our public land adventures' },
+  { label: 'TikTok', icon: 'tiktok', href: 'https://tiktok.com/@publiclandlovers', note: 'Videos of our favorite out of the way places' },
+  { label: 'YouTube', icon: 'youtube', href: 'https://youtube.com/@publiclandlovers', note: 'Van tours and long-form trip breakdowns' },
+  { label: 'Facebook', icon: 'facebook', href: 'https://facebook.com/publiclandlovers', note: 'Community & advocacy updates' },
+] as const;
 ---
 <Base title="Follow" description="Follow Public Land Lovers across Instagram, TikTok, YouTube, and Facebook.">
   <section class="section links-hero">
     <div class="wrap links-wrap">
       <p class="eyebrow">Follow Along</p>
       <h1>Public Land Lovers</h1>
-      <p class="lede">Everything, in one place &mdash; the platform-agnostic version of the bio link.</p>
+      <p class="lede">Follow us everywhere!</p>
 
       <div class="link-list">
         {links.map((l) => (
           <a class="link-btn" href={l.href} target="_blank" rel="noopener">
-            <span class="link-label">{l.label}</span>
-            <span class="link-note">{l.note}</span>
+            <Icon name={l.icon} size={24} />
+            <span class="link-text">
+              <span class="link-label">{l.label}</span>
+              <span class="link-note">{l.note}</span>
+            </span>
           </a>
         ))}
         <a class="link-btn link-btn-alt" href="/#signup">
-          <span class="link-label">Email list</span>
-          <span class="link-note">The channel no algorithm controls</span>
+          <span class="link-text">
+            <span class="link-label">Email list</span>
+            <span class="link-note">A monthly travel and public lands update with real ways to make a difference </span>
+          </span>
         </a>
       </div>
     </div>
@@ -43,8 +49,9 @@ const links = [
   }
   .link-btn {
     display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.9rem;
     padding: 1rem 1.25rem;
     border: 1px solid var(--ink);
     border-radius: 3px;
@@ -52,6 +59,11 @@ const links = [
     text-decoration: none;
     text-align: left;
     transition: background 0.15s ease, color 0.15s ease;
+  }
+  .link-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
   }
   .link-btn:hover {
     background: var(--ink);

@@ -22,4 +22,16 @@ const maps = defineCollection({
   }),
 });
 
-export const collections = { articles, maps };
+const threats = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/threats' }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string(),
+    // Same AGOL Experience Builder embed, tuned per-topic (bookmark/view
+    // params). Andrew swaps this in per page after scaffolding.
+    embedUrl: z.string().url(),
+    order: z.number().default(0),
+  }),
+});
+
+export const collections = { articles, maps, threats };
