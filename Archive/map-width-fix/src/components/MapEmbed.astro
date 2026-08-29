@@ -1,0 +1,50 @@
+---
+const { src, title = "Interactive map" } = Astro.props;
+---
+<section class="map-embed-wrap">
+  <div class="map-embed-inner">
+    <div class="map-embed">
+      <iframe
+        src={src}
+        title={title}
+        loading="lazy"
+        allowfullscreen
+      ></iframe>
+    </div>
+  </div>
+</section>
+<style>
+  /* Breaks out of whatever narrow text column this sits inside (e.g. the
+     42rem-wide prose body) back to the site's normal content width, so
+     the map always reads at full size regardless of where it's placed
+     in the surrounding write-up. */
+  .map-embed-wrap {
+    width: 100vw;
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    margin: 2.5rem 0;
+    padding: 0 1.5rem;
+    box-sizing: border-box;
+  }
+  .map-embed-inner {
+    max-width: var(--max-w);
+    margin: 0 auto;
+  }
+  .map-embed {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--paper-dark);
+  }
+  .map-embed iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+</style>

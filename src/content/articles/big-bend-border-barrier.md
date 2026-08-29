@@ -1,7 +1,7 @@
 ---
 title: "The Case Against a Border Barrier Through Big Bend"
 description: "Notes on the proposed border barrier project near Big Bend, its likely impacts, and how to submit a formal public comment."
-pubDate: 2026-05-12
+pubDate: 2026-08-28
 tags: ["public lands policy", "advocacy"]
 ---
 Border security matters.

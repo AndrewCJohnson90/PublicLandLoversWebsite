@@ -2,7 +2,7 @@ import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
 
 const articles = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/articles' }),
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/articles' }),
   schema: z.object({
     title: z.string(),
     description: z.string(),
@@ -12,24 +12,27 @@ const articles = defineCollection({
 });
 
 const maps = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/maps' }),
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/maps' }),
   schema: z.object({
     title: z.string(),
     description: z.string(),
-    // Public AGOL web map / web app embed URL (Embed API or app share URL)
-    embedUrl: z.string().url(),
+    // Optional now — the map itself is placed inline in the body via the
+    // <MapEmbed /> component (see src/components/MapEmbed.astro), so you
+    // can position it wherever you want relative to your write-up. This
+    // field is kept around for reference/backward compatibility only and
+    // isn't rendered automatically by the page template anymore.
+    embedUrl: z.string().url().optional(),
     region: z.string().optional(),
   }),
 });
 
 const threats = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/threats' }),
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/threats' }),
   schema: z.object({
     title: z.string(),
     description: z.string(),
-    // Same AGOL Experience Builder embed, tuned per-topic (bookmark/view
-    // params). Andrew swaps this in per page after scaffolding.
-    embedUrl: z.string().url(),
+    // Same note as above — placed inline via <MapEmbed /> in the body now.
+    embedUrl: z.string().url().optional(),
     order: z.number().default(0),
   }),
 });
