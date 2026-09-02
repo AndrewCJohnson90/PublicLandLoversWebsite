@@ -16,13 +16,12 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
         <p class="eyebrow">39.5&deg;N, 105.7&deg;W &mdash; American West</p>
         <h1>The public lands are ours to know, use, and defend.</h1>
         <p class="hero-sub">
-          Field notes, original mapping, and van life dispatches from the
-          BLM lands, national parks, and state parks of the American West.
-          Built by people who also do this for a living.
+          Sharing the beauty, threats, and enormity of public lands across the US and beyond.
         </p>
         <div class="hero-actions">
-          <a class="btn btn-solid" href="/maps/">Explore the maps</a>
-          <a class="btn" href="/articles/">Read the field notes</a>
+          <a class="btn btn-solid" href="/public-land-threats/">Threats to Public Lands</a>
+          <a class="btn" href="/maps/">Explore the Maps</a>
+          <a class="btn" href="/articles/">Original Articles</a>
         </div>
       </div>
     </div>
@@ -53,7 +52,7 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
     <div class="wrap">
       <div class="section-head">
         <p class="eyebrow">Interactive Mapping</p>
-        <h2>Maps built from the field, not from stock data</h2>
+        <h2>Maps built and designed by PublicLandLovers for public land lovers. </h2>
       </div>
       <div class="grid-2">
         {maps.map((m) => (
@@ -77,7 +76,7 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
       </div>
       <form class="signup-form" name="signup">
         <label for="email">Email</label>
-        <input id="email" name="email" type="email" placeholder="you@example.com" required />
+        <input id="email" name="email" type="email" placeholder="publiclandlovers@gmail.com" required />
         <button class="btn btn-solid" type="submit">Join the list</button>
       </form>
     </div>
