@@ -1,70 +1,99 @@
 ---
 import Base from '../../layouts/Base.astro';
 ---
-<Base title="Work With Us" description="Environmental, ecological, and geospatial consulting from Orovada Consulting LLC — the team behind Public Land Lovers.">
+<Base title="Work With Us" description="GIS and geospatial consulting from Orovada Consulting LLC — the team behind Public Land Lovers.">
   <section class="section">
     <div class="wrap work-grid">
       <div>
         <p class="eyebrow">Orovada Consulting LLC</p>
-
-        <h1>We work where people, science, and public lands meet.</h1>
-
+        <h1>The maps on this site are the portfolio.</h1>
         <p class="lede">
-          Public Land Lovers is built on the same skills we use through Orovada Consulting.
-          We explore public lands, collect data, build maps, document what we find, and
-          turn complicated information into something people can actually understand and use.
+          Every map you've seen here — feature services, LiDAR-derived
+          terrain models, field data pipelines — was built by the same
+          team that runs Orovada Consulting. If you need GIS, remote sensing,
+          or geospatial data pipeline work done well, this is what we do.
         </p>
-
-        <p>
-          Our work brings together ecology, environmental monitoring, GIS, field data,
-          photography, and storytelling. Whether you need help understanding a landscape,
-          organizing field data, building a mapping tool, documenting a project, or telling
-          an environmental story, we can help turn an idea into something useful.
-        </p>
-
         <ul class="services">
-          <li>Ecology &amp; environmental monitoring</li>
-          <li>GIS, mapping &amp; geospatial analysis</li>
-          <li>Field data collection &amp; data management</li>
-          <li>Remote sensing, LiDAR &amp; terrain analysis</li>
-          <li>Python automation &amp; spatial data pipelines</li>
-          <li>Environmental storytelling &amp; visual communication</li>
-          <li>Custom maps, web maps &amp; interactive tools</li>
+          <li>ArcGIS Pro &amp; ArcGIS Online project builds</li>
+          <li>Python automation for spatial data pipelines</li>
+          <li>Field data collection &amp; feature service design</li>
+          <li>LiDAR processing &amp; terrain analysis</li>
         </ul>
       </div>
 
-      <form class="lead-form" method="POST" action="/api/lead">
-        <label for="name">Name</label>
-        <input id="name" name="name" type="text" required />
+      <div class="form-panel">
+        <form id="lead-form" class="lead-form" name="contact" onsubmit="handleLeadSubmit(event)">
+          <!-- Submits into Orovada's existing Netlify Forms dashboard —
+               field names below intentionally match orovada.com's contact
+               form exactly so submissions land there identically. -->
+          <input type="hidden" name="form-name" value="contact" />
+          <p class="honeypot"><label>Don't fill this out: <input name="bot-field" /></label></p>
 
-        <label for="org">Organization</label>
-        <input id="org" name="org" type="text" />
+          <div class="form-row">
+            <div class="field">
+              <label for="first-name">First Name</label>
+              <input id="first-name" name="first-name" type="text" required />
+            </div>
+            <div class="field">
+              <label for="last-name">Last Name</label>
+              <input id="last-name" name="last-name" type="text" required />
+            </div>
+          </div>
 
-        <label for="email">Email</label>
-        <input id="email" name="email" type="email" required />
+          <label for="organization">Organization</label>
+          <input id="organization" name="organization" type="text" />
 
-        <label for="project">Project type</label>
-        <select id="project" name="project">
-          <option>GIS / mapping project</option>
-          <option>Python / data pipeline</option>
-          <option>Field data collection</option>
-          <option>Something else</option>
-        </select>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" required />
 
-        <label for="message">What are you working on?</label>
-        <textarea id="message" name="message" rows="4"></textarea>
+          <label for="service">Service Area</label>
+          <select id="service" name="service" required>
+            <option value="">Select a service area</option>
+            <option>Environmental Consulting &amp; Botanical Surveying</option>
+            <option>GIS &amp; Geospatial Services</option>
+            <option>Media Production &amp; Digital Marketing</option>
+            <option>Multiple Services</option>
+          </select>
 
-        <button class="btn btn-solid" type="submit">Send it over</button>
-        <p class="form-note">
-          Routes to a Cloudflare Pages Function at <code>/api/lead</code> &mdash;
-          see <code>functions/api/lead.js</code> to wire up email delivery
-          (Resend, SendGrid, etc.), or swap this form's <code>action</code>
-          for a Formspree endpoint for a zero-backend option.
-        </p>
-      </form>
+          <label for="message">Project Description</label>
+          <textarea id="message" name="message" rows="4" required></textarea>
+
+          <button class="btn btn-solid" type="submit">Send it over</button>
+
+        </form>
+
+        <div id="lead-success" class="lead-success" hidden>
+          <p class="success-title">Message received</p>
+          <p>Thanks for reaching out — we'll review your project details and get back to you within 1–2 business days.</p>
+        </div>
+      </div>
     </div>
   </section>
 </Base>
+
+<script is:inline>
+  function handleLeadSubmit(event) {
+    event.preventDefault();
+    const form = event.target;
+    const data = new FormData(form);
+
+    // mode: 'no-cors' because this is a cross-domain submission (this site
+    // is publiclandlovers.com, the form lives on orovada.com's Netlify
+    // Forms). The browser blocks JS from reading the response in that
+    // case, but the POST itself still reaches Netlify and gets recorded —
+    // so we just show our own success state rather than relying on a
+    // response we can't see.
+    fetch('https://orovada.com/', {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(data).toString(),
+    }).finally(() => {
+      form.hidden = true;
+      document.getElementById('lead-success').hidden = false;
+    });
+  }
+</script>
 
 <style>
   .work-grid {
@@ -91,14 +120,27 @@ import Base from '../../layouts/Base.astro';
     left: 0;
     color: var(--rust);
   }
-  .lead-form {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
+  .form-panel {
     background: var(--paper-dark);
     border: 1px solid var(--line);
     border-radius: 3px;
     padding: 1.75rem;
+  }
+  .lead-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .honeypot { display: none; }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
   }
   .form-note {
     font-family: var(--font-mono);
@@ -106,12 +148,19 @@ import Base from '../../layouts/Base.astro';
     color: var(--ink-soft);
     margin: 0;
   }
-  .form-note code {
-    background: rgba(42,40,32,0.08);
-    padding: 0.1rem 0.3rem;
-    border-radius: 2px;
+  .lead-success {
+    text-align: center;
+    padding: 2rem 1rem;
+  }
+  .success-title {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 0.5rem;
   }
   @media (max-width: 800px) {
     .work-grid { grid-template-columns: 1fr; }
+    .form-row { grid-template-columns: 1fr; }
   }
 </style>
