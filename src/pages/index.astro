@@ -67,21 +67,50 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
     </div>
   </section>
 
-  <section class="section signup">
+  <section id="signup" class="section signup">
     <div class="wrap signup-grid">
       <div>
         <p class="eyebrow">Stay in the loop</p>
         <h2>One list, no algorithm.</h2>
         <p>New maps, new field notes, and trip dispatches &mdash; straight to your inbox, nowhere else.</p>
       </div>
-      <form class="signup-form" name="signup">
-        <label for="email">Email</label>
-        <input id="email" name="email" type="email" placeholder="publiclandlovers@gmail.com" required />
-        <button class="btn btn-solid" type="submit">Join the list</button>
-      </form>
+
+      <div class="signup-panel">
+        <form id="signup-form" class="signup-form" onsubmit="handleSignupSubmit(event)">
+          <label for="email">Email</label>
+          <input id="email" name="fields[email]" type="email" placeholder="YourEmail@mail.com" required />
+          <input type="hidden" name="ml-submit" value="1" />
+          <input type="hidden" name="anticsrf" value="true" />
+          <button class="btn btn-solid" type="submit">Join the list</button>
+        </form>
+        <p id="signup-success" class="signup-success" hidden>You're on the list — welcome aboard.</p>
+      </div>
     </div>
   </section>
 </Base>
+
+<script is:inline>
+  function handleSignupSubmit(event) {
+    event.preventDefault();
+    const form = event.target;
+    const data = new FormData(form);
+
+    // Cross-domain submission straight into MailerLite (this site posts
+    // to assets.mailerlite.com, not its own domain) — mode: 'no-cors'
+    // because the browser won't let us read the response across origins,
+    // but the subscribe request itself still goes through. Same pattern
+    // used for the work-with-us form posting into Orovada's Netlify Forms.
+    fetch('https://assets.mailerlite.com/jsonp/2612152/forms/197531990852896749/subscribe', {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(data).toString(),
+    }).finally(() => {
+      form.hidden = true;
+      document.getElementById('signup-success').hidden = false;
+    });
+  }
+</script>
 
 <style>
   .hero {
@@ -129,13 +158,20 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
     gap: 2rem;
     align-items: center;
   }
+  .signup-panel { display: flex; flex-direction: column; gap: 0.75rem; }
   .signup-form {
     display: flex;
     gap: 0.75rem;
     align-items: flex-end;
     flex-wrap: wrap;
   }
-  .signup-form input { max-width: 16rem; }
+  .signup-form input[type="email"] { max-width: 16rem; }
+  .signup-success {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--sage-dark);
+    margin: 0;
+  }
 
   @media (max-width: 900px) {
     .grid-3, .grid-2 { grid-template-columns: 1fr; }
