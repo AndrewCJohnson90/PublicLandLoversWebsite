@@ -76,41 +76,55 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
       </div>
 
       <div class="signup-panel">
-        <form id="signup-form" class="signup-form" onsubmit="handleSignupSubmit(event)">
-          <label for="email">Email</label>
-          <input id="email" name="fields[email]" type="email" placeholder="YourEmail@mail.com" required />
-          <input type="hidden" name="ml-submit" value="1" />
-          <input type="hidden" name="anticsrf" value="true" />
-          <button class="btn btn-solid" type="submit">Join the list</button>
-        </form>
-        <p id="signup-success" class="signup-success" hidden>You're on the list — welcome aboard.</p>
+        <!-- Real MailerLite embed structure/IDs preserved so their own
+             script (loaded below) can find and wire it up correctly —
+             this replaces an earlier custom fetch() attempt that MailerLite
+             silently rejected. Only the CSS is ours; the classes and IDs
+             below are required as-is for their script to work. -->
+        <div id="mlb2-45507042" class="ml-form-embedContainer ml-subscribe-form ml-subscribe-form-45507042">
+          <div class="row-form">
+            <form
+              class="ml-block-form signup-form"
+              action="https://assets.mailerlite.com/jsonp/2612152/forms/197531990852896749/subscribe"
+              data-code=""
+              method="post"
+              target="_blank"
+            >
+              <label for="email">Email</label>
+              <input
+                aria-label="email"
+                aria-required="true"
+                type="email"
+                id="email"
+                name="fields[email]"
+                placeholder="YourEmail@mail.com"
+                autocomplete="email"
+                required
+              />
+              <input type="hidden" name="ml-submit" value="1" />
+              <button class="btn btn-solid" type="submit">Join the list</button>
+              <input type="hidden" name="anticsrf" value="true" />
+            </form>
+          </div>
+          <div class="row-success signup-success" style="display:none">
+            <p>You're on the list &mdash; welcome aboard.</p>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 </Base>
 
 <script is:inline>
-  function handleSignupSubmit(event) {
-    event.preventDefault();
-    const form = event.target;
-    const data = new FormData(form);
-
-    // Cross-domain submission straight into MailerLite (this site posts
-    // to assets.mailerlite.com, not its own domain) — mode: 'no-cors'
-    // because the browser won't let us read the response across origins,
-    // but the subscribe request itself still goes through. Same pattern
-    // used for the work-with-us form posting into Orovada's Netlify Forms.
-    fetch('https://assets.mailerlite.com/jsonp/2612152/forms/197531990852896749/subscribe', {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(data).toString(),
-    }).finally(() => {
-      form.hidden = true;
-      document.getElementById('signup-success').hidden = false;
-    });
+  // Required global callback — MailerLite's own embed script calls this
+  // by name (ml_webform_success_45507042) once a submission succeeds.
+  function ml_webform_success_45507042() {
+    var $ = window.ml_jQuery || window.jQuery;
+    $('.ml-subscribe-form-45507042 .row-success').show();
+    $('.ml-subscribe-form-45507042 .row-form').hide();
   }
 </script>
+<script is:inline src="https://groot.mailerlite.com/js/w/webforms.min.js?v83147fa8ce2d95cb73ece7f28b469519"></script>
 
 <style>
   .hero {
@@ -158,19 +172,35 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
     gap: 2rem;
     align-items: center;
   }
-  .signup-panel { display: flex; flex-direction: column; gap: 0.75rem; }
   .signup-form {
     display: flex;
     gap: 0.75rem;
     align-items: flex-end;
     flex-wrap: wrap;
   }
-  .signup-form input[type="email"] { max-width: 16rem; }
-  .signup-success {
+  .signup-form label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+  .signup-form input[type="email"] {
+    max-width: 16rem;
+    font-family: var(--font-body);
+    font-size: 1rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--ink);
+    border-radius: 2px;
+  }
+  .row-success {
     font-family: var(--font-mono);
     font-size: 0.85rem;
     color: var(--sage-dark);
-    margin: 0;
   }
 
   @media (max-width: 900px) {
