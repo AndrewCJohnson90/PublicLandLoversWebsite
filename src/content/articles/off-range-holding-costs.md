@@ -30,7 +30,7 @@ A 2021 study of ten spring-fed meadows in Nevada found that free-roaming horses 
 
 That matters because these wet meadows and riparian areas are some of the most productive parts of otherwise dry landscapes.
 
-The researchers found that longer and more intensive use was associated with increased soil alteration and bare ground. The study sites overlapped with BLM horse management areas and Forest Service territories, public-land grazing allotments, and core greater sage-grouse habitat.[2](#source-2)
+The researchers found that longer and more intensive use was associated with increased soil alteration and bare ground. The study sites overlapped with BLM horse management areas and Forest Service territories, public land grazing allotments, and core greater sage-grouse habitat.[2](#source-2)
 
 In other words, the places horses are most likely to concentrate are often the same places that provide disproportionately important habitat for other species.
 
@@ -40,7 +40,7 @@ That creates a difficult management problem: protecting one valued component of 
 
 The greater sage-grouse is often described as a sagebrush-dependent species, and that is true. But its habitat needs extend beyond sagebrush itself.
 
-Wet meadows and other productive seasonal habitats provide important forage and brood-rearing opportunities. Damage to these areas can therefore greatly affect sage-grouse. Horses and burros direct impacts to sagebrush can vary from trampling to browsing on young seedlings. Yet, the greater impact to sage-grouse is via reducing cover and complexity within wet meadows and mesic brood-rearing habitat.
+Wet meadows and other productive seasonal habitats provide important forage and brood-rearing opportunities. Damage to these areas can therefore greatly affect sage-grouse. The direct effects of horses and burros on sagebrush can range from trampling to browsing on young seedlings. But their greater impact on sage-grouse may come through the degradation of wet meadows and other mesic brood-rearing habitat.
 
 A 2021 study by Coates and colleagues found that for every **50% increase in horse abundance above the maximum AML, sage-grouse abundance was predicted to decline by approximately 2.6% annually**.[3](#source-3)
 
@@ -106,11 +106,11 @@ That could mean:
 - Spring and wet-meadow restoration
 - Wildlife monitoring
 - Additional field biologists and range specialists
-- Restoration of degraded public-land watersheds
+- Restoration of degraded public land watersheds
 
 None of these priorities is inherently more deserving than a humane approach to managing wild horses and burros.
 
-But public-land budgets are finite.
+But public land budgets are finite.
 
 When two needs compete for the same limited funding, the opportunity cost matters.
 
@@ -139,7 +139,7 @@ That means asking difficult questions about:
 - How animals can be placed through adoption or other programs
 - How public lands should be managed when wildlife, livestock, recreation, and free-roaming equids all depend on the same limited resources
 
-These are questions about whether public-land management is actually working.
+These are questions about whether public land management is actually working.
 
 ## Landscapes Have Limits
 

@@ -18,7 +18,7 @@ Big Bend National Park contains more than 800,000 acres of mountains, desert, ca
 
 That complexity matters.
 
-When infrastructure is proposed in a landscape like this, the question should not simply be *Can we build it?*
+When infrastructure is proposed in a landscape like this, the question should not simply be, *"Can we build it?"*
 
 It should be:
 
