@@ -140,8 +140,8 @@ textarea:focus-visible {
   background: var(--dusk);
   color: var(--paper);
 }
-.section-dark h2, .section-dark h3 { color: var(--paper); }
-.section-dark .eyebrow { color: var(--ochre); }
+.section-dark h2, .section-dark h3 { color: #1e1e1d; }
+.section-dark .eyebrow { color: #1e1e1d; }
 
 hr.rule {
   border: none;

@@ -24,7 +24,7 @@ const articles = (await getCollection('articles', notDraft))
             <h3>{a.data.title}</h3>
             <p>{a.data.description}</p>
             {a.data.tags.length > 0 && (
-              <p class="tags">{a.data.tags.join(' &middot; ')}</p>
+              <p class="tags">{a.data.tags.join(' · ')}</p>
             )}
           </a>
         ))}

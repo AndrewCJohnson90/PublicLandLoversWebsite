@@ -136,11 +136,46 @@ textarea:focus-visible {
 }
 
 .section-dark {
-  background: var(--dusk);
+  background: var(--dusk-dark);
   color: var(--paper);
 }
-.section-dark h2, .section-dark h3 { color: var(--paper); }
-.section-dark .eyebrow { color: var(--ochre); }
+
+.section-dark h2,
+.section-dark h3 {
+  color: var(--paper);
+}
+
+.section-dark .eyebrow {
+  color: var(--ochre);
+}
+
+.section-dark .threat-card {
+  background: var(--dusk);
+  border-color: rgba(237, 231, 216, 0.16);
+}
+
+.section-dark .threat-card h3 {
+  color: var(--paper);
+}
+
+.section-dark .threat-card p {
+  color: var(--paper-dark);
+}
+
+.section-dark .threat-card:hover {
+  background: var(--sage-dark);
+  border-color: var(--sage);
+}
+
+.section-dark .section-cta .btn {
+  border-color: var(--paper);
+  color: var(--paper);
+}
+
+.section-dark .section-cta .btn:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
 
 hr.rule {
   border: none;

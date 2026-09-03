@@ -8,15 +8,18 @@ const articles = (await getCollection('articles', notDraft))
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
   .slice(0, 3);
 const maps = (await getCollection('maps', notDraft)).slice(0, 2);
+const threats = (await getCollection('threats', notDraft))
+  .sort((a, b) => a.data.order - b.data.order)
+  .slice(0, 3);
 ---
 <Base title="Public Land Lovers">
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <p class="eyebrow">39.5&deg;N, 105.7&deg;W &mdash; American West</p>
-        <h1>The public lands are ours to know, use, and defend.</h1>
+        <p class="eyebrow">40.375&deg;N, 120.122&deg;W</p>
+        <h1>Public lands survive in our shared belief that they are irreplaceable.</h1>
         <p class="hero-sub">
-          Sharing the beauty, threats, and enormity of public lands across the US and beyond.
+          Exploring the beauty, threats, and enormity of public lands across the US and beyond.
         </p>
         <div class="hero-actions">
           <a class="btn btn-solid" href="/public-land-threats/">Threats to Public Lands</a>
@@ -51,8 +54,28 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
   <section class="section section-dark">
     <div class="wrap">
       <div class="section-head">
+        <p class="eyebrow">Public Land Threats</p>
+        <h2>The places under the most pressure right now</h2>
+      </div>
+      <div class="grid-3">
+        {threats.map((t) => (
+          <a class="card threat-card" href={`/public-land-threats/${t.id}/`}>
+            <h3>{t.data.title}</h3>
+            <p>{t.data.description}</p>
+          </a>
+        ))}
+      </div>
+      <p class="section-cta"><a class="btn" href="/public-land-threats/">See all threats &rarr;</a></p>
+    </div>
+  </section>
+
+  <Contour variant="divider" tone="light" />
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
         <p class="eyebrow">Interactive Mapping</p>
-        <h2>Maps built and designed by PublicLandLovers for public land lovers. </h2>
+        <h2>Maps designed by PublicLandLovers for public land lovers. </h2>
       </div>
       <div class="grid-2">
         {maps.map((m) => (
@@ -72,7 +95,7 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
       <div>
         <p class="eyebrow">Stay in the loop</p>
         <h2>One list, no algorithm.</h2>
-        <p>New maps, new field notes, and trip dispatches &mdash; straight to your inbox, nowhere else.</p>
+        <p>New maps, articles, and current public land threats &mdash; straight to your inbox, nowhere else.</p>
       </div>
 
       <div class="signup-panel">
@@ -148,22 +171,22 @@ const maps = (await getCollection('maps', notDraft)).slice(0, 2);
     grid-template-columns: repeat(2, 1fr);
     gap: 1.25rem;
   }
-  .article-card, .map-card {
+  .article-card, .map-card, .threat-card {
     display: block;
     color: inherit;
     text-decoration: none;
     transition: transform 0.15s ease, border-color 0.15s ease;
   }
-  .article-card:hover, .map-card:hover {
+  .article-card:hover, .map-card:hover, .threat-card:hover {
     transform: translateY(-2px);
     border-color: var(--rust);
     text-decoration: none;
   }
-  .section-dark .map-card {
+  .section-dark .threat-card {
     background: var(--dusk-dark);
     border-color: rgba(255,255,255,0.12);
   }
-  .section-dark .map-card:hover { border-color: var(--ochre); }
+  .section-dark .threat-card:hover { border-color: var(--ochre); }
   .section-cta { margin-top: 1.75rem; }
 
   .signup-grid {
