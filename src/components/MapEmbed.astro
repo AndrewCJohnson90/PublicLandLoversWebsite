@@ -1,8 +1,25 @@
+```astro
 ---
 const { src, title = "Interactive map" } = Astro.props;
 ---
+
 <section class="map-embed-wrap" data-map-embed-wrap>
   <div class="map-embed-inner">
+
+    <div class="map-embed-header">
+      <span class="map-embed-title">{title}</span>
+
+      <a
+        href={src}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="map-fullscreen-link"
+        aria-label={`Open ${title} in full screen`}
+      >
+        Open full screen ↗
+      </a>
+    </div>
+
     <div class="map-embed">
       <iframe
         src={src}
@@ -11,19 +28,51 @@ const { src, title = "Interactive map" } = Astro.props;
         allowfullscreen
       ></iframe>
     </div>
+
   </div>
 </section>
+
 <style>
   .map-embed-wrap {
     margin-top: 2.5rem;
     margin-bottom: 2.5rem;
   }
+
   .map-embed-inner {
     max-width: var(--max-w);
     margin: 0 auto;
     padding: 0 1.5rem;
     box-sizing: border-box;
   }
+
+  .map-embed-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.65rem;
+  }
+
+  .map-embed-title {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .map-fullscreen-link {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.75rem;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: opacity 0.2s ease;
+  }
+
+  .map-fullscreen-link:hover {
+    opacity: 0.65;
+  }
+
   .map-embed {
     position: relative;
     width: 100%;
@@ -33,6 +82,7 @@ const { src, title = "Interactive map" } = Astro.props;
     overflow: hidden;
     background: var(--paper-dark);
   }
+
   .map-embed iframe {
     position: absolute;
     inset: 0;
@@ -40,17 +90,39 @@ const { src, title = "Interactive map" } = Astro.props;
     height: 100%;
     border: 0;
   }
+
+  @media (max-width: 600px) {
+    .map-embed-header {
+      margin-bottom: 0.75rem;
+    }
+
+    .map-fullscreen-link {
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      font-size: 0.7rem;
+    }
+
+    .map-embed {
+      aspect-ratio: 4 / 5;
+    }
+  }
 </style>
+
 <script>
   function breakoutMapEmbeds() {
     document.querySelectorAll('[data-map-embed-wrap]').forEach((el) => {
       el.style.marginLeft = '0px';
       el.style.width = '';
+
       const leftOffset = el.getBoundingClientRect().left;
+
       el.style.marginLeft = `${-leftOffset}px`;
       el.style.width = `${window.innerWidth}px`;
     });
   }
+
   breakoutMapEmbeds();
   window.addEventListener('resize', breakoutMapEmbeds);
 </script>
+```
