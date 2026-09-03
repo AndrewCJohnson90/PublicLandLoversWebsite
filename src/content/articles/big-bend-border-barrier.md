@@ -34,17 +34,17 @@ There is a reason for that framing: Border Patrol does encounter people attempti
 
 But the scale and geography of that activity deserve closer examination.
 
-Data compiled by [Keep Big Bend Wild](https://keepbigbendwild.org/big-bend-border-statistics/) from National Park Service and Border Patrol statistics show a dramatic difference between the number of people apprehended within Big Bend National Park and the much larger numbers recorded across the Southwest border.
+Data compiled by [Keep Big Bend Wild](https://keepbigbendwild.org/big-bend-border-statistics/) from National Park Service and Border Patrol statistics show a dramatic difference between the number of people apprehended within Big Bend National Park and the much larger numbers recorded across the Southwest border.[1](#source-1)
 
-According to the organization's compilation, there were **200 apprehensions inside Big Bend National Park in 2025**. Its table compares that figure with **443,671 apprehensions and encounters across the Southwest Border**, putting activity inside the park at approximately **0.045% of the regional total**. The same dataset reports 3,096 apprehensions in the Big Bend Sector, which includes far more territory than the national park.
+According to the organization's compilation, there were **200 apprehensions inside Big Bend National Park in 2025**. Its table compares that figure with **443,671 apprehensions and encounters across the Southwest Border**, putting activity inside the park at approximately **0.045% of the regional total**. The same dataset reports 3,096 apprehensions in the Big Bend Sector, which includes far more territory than the national park.[1](#source-1)
 
-These numbers require an important caveat. Keep Big Bend Wild notes that its National Park Service figures are reported by calendar year while Border Patrol figures are reported by fiscal year, and that the NPS data were unpublished and provided informally. The organization also notes assumptions involved in some of the north-of-park figures.
+These numbers require an important caveat. Keep Big Bend Wild notes that its National Park Service figures are reported by calendar year while Border Patrol figures are reported by fiscal year, and that the NPS data were unpublished and provided informally. The organization also notes assumptions involved in some of the north-of-park figures.[1](#source-1)
 
-Separately, CBP's FY2025 data show 3,096 apprehensions in the Big Bend Sector out of 237,538 across the U.S.-Mexico border, or about **1.3% of the national total**. That represents a 74% decline from the sector's FY2023 level.
+Separately, CBP's FY2025 data show 3,096 apprehensions in the Big Bend Sector out of 237,538 across the U.S.-Mexico border, or about **1.3% of the national total**. That represents a 74% decline from the sector's FY2023 level.[2](#source-2)
 
 The distinction is important because the Big Bend Sector is enormous.
 
-The sector is responsible for approximately **517 miles of the U.S.-Mexico border**, while Big Bend National Park contains about **118 miles** of that boundary.
+The sector is responsible for approximately **517 miles of the U.S.-Mexico border**, while Big Bend National Park contains about **118 miles** of that boundary.[2](#source-2)
 
 Those miles are not interchangeable.
 
@@ -70,7 +70,7 @@ That means a border-security strategy designed for flat or heavily developed por
 
 The landscape itself is part of the security equation.
 
-In much of the Big Bend region, rugged terrain already prevents or severely restricts vehicle travel. Keep Big Bend Wild argues that border infrastructure should account for those natural barriers rather than constructing new roads into country where the terrain itself already provides a substantial obstacle.
+In much of the Big Bend region, rugged terrain already prevents or severely restricts vehicle travel. Keep Big Bend Wild argues that border infrastructure should account for those natural barriers rather than constructing new roads into country where the terrain itself already provides a substantial obstacle.[3](#source-3)
 
 That is not an argument against security.
 
@@ -82,7 +82,7 @@ This is where the current controversy becomes bigger than a debate over walls.
 
 In 2026, the Department of Homeland Security issued waivers covering numerous federal laws in order to expedite construction of border barriers and roads in the Big Bend region.
 
-The June 9 Federal Register notice states that DHS determined there was an "acute and immediate need" for additional physical barriers and roads in the project area. It then waived a broad collection of federal, state, and local legal requirements associated with several federal statutes, including the National Environmental Policy Act, Endangered Species Act, Clean Water Act, National Historic Preservation Act, and Migratory Bird Treaty Act.
+The June 9 Federal Register notice states that DHS determined there was an "acute and immediate need" for additional physical barriers and roads in the project area. It then waived a broad collection of federal, state, and local legal requirements associated with several federal statutes, including the National Environmental Policy Act, Endangered Species Act, Clean Water Act, National Historic Preservation Act, and Migratory Bird Treaty Act.[4](#source-4)
 
 That may make construction faster.
 
@@ -92,15 +92,15 @@ Environmental review is often criticized as an obstacle to getting things done. 
 
 It forces basic questions:
 
-* Where are the sensitive habitats?
-* Where are archaeological sites?
-* Where does water move through the landscape?
-* Where are endangered species found?
-* Where will roads cause erosion?
-* Which existing roads can be used?
-* Which routes would create the least disturbance?
-* Where does the terrain itself already provide a barrier?
-* Can cameras, sensors, thermal imaging, or other technologies accomplish the same security objective without clearing miles of new roads?
+- Where are the sensitive habitats?
+- Where are archaeological sites?
+- Where does water move through the landscape?
+- Where are endangered species found?
+- Where will roads cause erosion?
+- Which existing roads can be used?
+- Which routes would create the least disturbance?
+- Where does the terrain itself already provide a barrier?
+- Can cameras, sensors, thermal imaging, or other technologies accomplish the same security objective without clearing miles of new roads?
 
 And perhaps most importantly:
 
@@ -116,7 +116,7 @@ When the normal review process is removed, decision-makers lose one of the princ
 
 The timing of the work is one of the most troubling aspects of the current situation.
 
-CBP opened a public comment period for its Big Bend Vehicle Border Barrier System, known as BBT-5. The project covers approximately 157 non-contiguous miles in Brewster, Terrell, and Val Verde counties, with comments due August 31, 2026.
+CBP opened a public comment period for its Big Bend Vehicle Border Barrier System, known as BBT-5. The project covers approximately **157 non-contiguous miles in Brewster, Terrell, and Val Verde counties**, with comments due August 31, 2026.[3](#source-3)
 
 Meanwhile, heavy equipment was already moving ground inside Big Bend National Park.
 
@@ -132,11 +132,11 @@ Once vegetation has been removed and a road corridor has been cut into the deser
 
 When images of heavy equipment began circulating, the nature of the work became a subject of intense public scrutiny.
 
-On August 13, CBP Commissioner Rodney Scott described the activity as **"survey and design work."** He also said CBP was building one new access road, improving existing roads, installing detection technology, and placing vehicle barriers in limited, strategic locations.
+On August 13, CBP Commissioner Rodney Scott described the activity as **"survey and design work."** He also said CBP was building one new access road, improving existing roads, installing detection technology, and placing vehicle barriers in limited, strategic locations.[5](#source-5)
 
-But satellite imagery analyzed by Bellingcat showed **more than five miles of new road construction** inside Big Bend National Park.
+But satellite imagery analyzed by Bellingcat showed **more than five miles of new road construction** inside Big Bend National Park.[5](#source-5)
 
-The imagery showed new roads extending through riparian forest and floodplain areas near the Rio Grande, including locations near Cottonwood Campground, Santa Elena Canyon, and Mariscal Canyon.
+The imagery showed new roads extending through riparian forest and floodplain areas near the Rio Grande, including locations near Cottonwood Campground, Santa Elena Canyon, and Mariscal Canyon.[5](#source-5)
 
 Whatever terminology is used to describe the work, the physical reality is what matters.
 
@@ -170,7 +170,7 @@ Modern border surveillance does not require a wall on every mile.
 
 Cameras, wireless sensors, infrared and thermal systems, and other technologies can provide information without necessarily creating continuous physical barriers through some of the most sensitive portions of the landscape.
 
-In fact, CBP's own description of the project includes detection technology and sensors alongside roads and vehicle barriers.
+In fact, CBP's own description of the project includes detection technology and sensors alongside roads and vehicle barriers.[3](#source-3)
 
 The technology exists.
 
@@ -246,10 +246,36 @@ And recognize that in a place as complicated and extraordinary as Big Bend, thos
 
 ## Sources
 
-* [Keep Big Bend Wild — Big Bend Border Statistics](https://keepbigbendwild.org/big-bend-border-statistics/)
-* [Keep Big Bend Wild — Big Bend Sector and BBNP Migrant Numbers](https://keepbigbendwild.org/wp-content/uploads/2026/05/Big-Bend-Sector-and-BBNP-Migrant-Numbers.pdf)
-* [Keep Big Bend Wild — BBT-5: Big Bend Vehicle Border Barrier System](https://keepbigbendwild.org/bbt-5-big-bend-vehicle-border-barrier-system/)
-* [U.S. Customs and Border Protection — Big Bend Sector](https://www.cbp.gov/border-security/along-us-borders/border-patrol-sectors/big-bend-sector-texas)
-* [Federal Register — DHS Determination and Waiver, June 9, 2026](https://www.govinfo.gov/content/pkg/FR-2026-06-09/pdf/2026-11473.pdf)
-* [Bellingcat — Satellite Imagery Documents New Border Patrol Road Construction in Big Bend National Park](https://www.bellingcat.com/news/us-canada/2026/08/20/satellite-imagery-documents-new-border-patrol-road-construction-in-big-bend-national-park/)
-* [Texas Tribune — What to know about possible border barriers in Big Bend](https://www.texastribune.org/2026/08/18/texas-big-bend-national-park-border-wall-plans-explainer/)
+<a id="source-1"></a>
+
+1. **Keep Big Bend Wild.** *Big Bend Border Statistics.*  
+   https://keepbigbendwild.org/big-bend-border-statistics/
+
+<a id="source-2"></a>
+
+2. **U.S. Customs and Border Protection.** *Big Bend Sector.*  
+   https://www.cbp.gov/border-security/along-us-borders/border-patrol-sectors/big-bend-sector-texas
+
+<a id="source-3"></a>
+
+3. **Keep Big Bend Wild.** *BBT-5: Big Bend Vehicle Border Barrier System.*  
+   https://keepbigbendwild.org/bbt-5-big-bend-vehicle-border-barrier-system/
+
+   See also: *Big Bend Sector and BBNP Migrant Numbers.*  
+   https://keepbigbendwild.org/wp-content/uploads/2026/05/Big-Bend-Sector-and-BBNP-Migrant-Numbers.pdf
+
+<a id="source-4"></a>
+
+4. **U.S. Department of Homeland Security.** *Determination and Waiver, June 9, 2026.* Federal Register.  
+   https://www.govinfo.gov/content/pkg/FR-2026-06-09/pdf/2026-11473.pdf
+
+<a id="source-5"></a>
+
+5. **Bellingcat.** *Satellite Imagery Documents New Border Patrol Road Construction in Big Bend National Park.*  
+   https://www.bellingcat.com/news/us-canada/2026/08/20/satellite-imagery-documents-new-border-patrol-road-construction-in-big-bend-national-park/
+
+<a id="source-6"></a>
+
+6. **Texas Tribune.** *What to know about possible border barriers in Big Bend.*  
+   https://www.texastribune.org/2026/08/18/texas-big-bend-national-park-border-wall-plans-explainer/
+```
