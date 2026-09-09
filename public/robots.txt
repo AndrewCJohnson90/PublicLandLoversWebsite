@@ -1,0 +1,43 @@
+# Search engines
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+# AI crawlers — explicitly allowed. Cloudflare's account-level bot
+# settings can override this regardless of what's written here, so also
+# check Security > Bots in the Cloudflare dashboard if AI traffic looks
+# blocked despite this file.
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+# Everything else
+User-agent: *
+Allow: /
+
+Sitemap: https://publiclandlovers.com/sitemap-index.xml

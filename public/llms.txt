@@ -1,0 +1,23 @@
+# Public Land Lovers
+
+> Public Land Lovers documents public lands across the American West through
+> original GIS mapping, field-based articles, and van life travel — run by
+> Andrew Johnson and Janyne Little of Orovada Consulting LLC.
+
+## Threats to Public Lands
+- [Threats to Public Lands](https://publiclandlovers.com/public-land-threats/): Hub tracking the biggest current threats to U.S. public lands, place by place.
+- [Big Bend Border Wall](https://publiclandlovers.com/public-land-threats/big-bend-border-wall/): Proposed border infrastructure through Big Bend National Park and Big Bend Ranch State Park.
+- [Bears Ears](https://publiclandlovers.com/public-land-threats/bears-ears/): Ongoing fight over Bears Ears National Monument's boundaries and protections.
+- [Grand Staircase-Escalante](https://publiclandlovers.com/public-land-threats/grand-staircase-escalante/): Threats to Grand Staircase-Escalante National Monument.
+- [Roadless Rule](https://publiclandlovers.com/public-land-threats/roadless-rule/): What repealing the Roadless Rule means for national forest land.
+- [Chaco Canyon](https://publiclandlovers.com/public-land-threats/chaco-canyon/): Drilling and development pressure near Chaco Culture National Historical Park.
+
+## Maps
+- [Maps](https://publiclandlovers.com/maps/): Interactive maps built with ArcGIS Pro and ArcGIS Online from original fieldwork.
+
+## Articles
+- [Articles](https://publiclandlovers.com/articles/): Original field notes and public lands advocacy writing.
+
+## About
+- [About](https://publiclandlovers.com/about/): About Public Land Lovers and Orovada Consulting LLC.
+- [Work With Us](https://publiclandlovers.com/work-with-us/): GIS, geospatial, and environmental consulting services from Orovada Consulting LLC.
