@@ -81,7 +81,7 @@ import requests
 LAYER_URL = (
     "https://services8.arcgis.com/"
     "KzyxLudI6Hn5u85O/arcgis/rest/services/"
-    "Janyne_and_Andrew_VanLife/FeatureServer/0"
+    "Janyne_and_Andrew_VanLife_Public/FeatureServer/0"
 )
 
 WEBSITE_URL = "https://publiclandlovers.com"
