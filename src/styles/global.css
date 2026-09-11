@@ -93,6 +93,19 @@ textarea:focus-visible {
   color: var(--ink-soft);
 }
 
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.hero-description {
+  font-size: 1rem;
+  color: var(--ink-soft);
+  max-width: var(--max-w);
+  margin-top: 1.5rem;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
