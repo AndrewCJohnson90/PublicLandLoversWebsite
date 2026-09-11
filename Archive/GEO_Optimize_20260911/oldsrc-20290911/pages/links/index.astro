@@ -1,0 +1,91 @@
+---
+import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
+
+const links = [
+  { label: 'Instagram', icon: 'instagram', href: 'https://instagram.com/publiclandlovers', note: 'Reels of our public land adventures' },
+  { label: 'TikTok', icon: 'tiktok', href: 'https://tiktok.com/@publiclandlovers', note: 'Videos of our favorite out-of-the-way places' },
+  { label: 'YouTube', icon: 'youtube', href: 'https://youtube.com/@publiclandlovers', note: 'Van tours and long-form trip breakdowns' },
+  { label: 'Facebook', icon: 'facebook', href: 'https://facebook.com/publiclandlovers', note: 'Community & advocacy updates' },
+] as const;
+---
+<Base title="Follow" description="Follow Public Land Lovers across Instagram, TikTok, YouTube, and Facebook.">
+  <section class="section links-hero">
+    <div class="wrap links-wrap">
+      <p class="eyebrow">Follow Along</p>
+      <h1>Public Land Lovers</h1>
+      <p class="lede">Follow us everywhere!</p>
+
+      <div class="link-list">
+        {links.map((l) => (
+          <a class="link-btn" href={l.href} target="_blank" rel="noopener">
+            <Icon name={l.icon} size={24} />
+            <span class="link-text">
+              <span class="link-label">{l.label}</span>
+              <span class="link-note">{l.note}</span>
+            </span>
+          </a>
+        ))}
+        <a class="link-btn link-btn-alt" href="/#signup">
+          <span class="link-text">
+            <span class="link-label">Email list</span>
+            <span class="link-note">A monthly travel and public lands update with real ways to make a difference </span>
+          </span>
+        </a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .links-hero { padding-top: 4rem; padding-bottom: 4rem; }
+  .links-wrap { max-width: 28rem; margin: 0 auto; text-align: center; }
+  .lede { color: var(--ink-soft); }
+  .link-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    margin-top: 2.5rem;
+  }
+  .link-btn {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 1rem 1.25rem;
+    border: 1px solid var(--ink);
+    border-radius: 3px;
+    color: var(--ink);
+    text-decoration: none;
+    text-align: left;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .link-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .link-btn:hover {
+    background: var(--ink);
+    color: var(--paper);
+    text-decoration: none;
+  }
+  .link-btn-alt {
+    border-color: var(--rust);
+    color: var(--rust-dark);
+  }
+  .link-btn-alt:hover {
+    background: var(--rust);
+    color: var(--paper);
+  }
+  .link-label {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+  .link-note {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    opacity: 0.75;
+  }
+</style>

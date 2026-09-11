@@ -1,0 +1,38 @@
+---
+import Base from '../../../layouts/Base.astro';
+import { getCollection, render } from 'astro:content';
+import { notDraft } from '../../../lib/content';
+
+export async function getStaticPaths() {
+  const maps = await getCollection('maps', notDraft);
+  return maps.map((m) => ({ params: { id: m.id }, props: { entry: m } }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<Base title={entry.data.title} description={entry.data.description}>
+  <section class="section map-header">
+    <div class="wrap">
+      <p class="eyebrow">{entry.data.region ?? 'Interactive Map'}</p>
+      <h1>{entry.data.title}</h1>
+      <p class="lede">{entry.data.description}</p>
+    </div>
+  </section>
+
+  <section class="section content-section">
+    <div class="wrap">
+      <div class="content-body">
+        <Content />
+        <p><a class="btn" href="/maps/">&larr; All maps</a></p>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .map-header { padding-bottom: 0; }
+  .lede { max-width: 36rem; color: var(--ink-soft); font-size: 1.05rem; }
+  .content-body { max-width: 42rem; }
+  .content-section { padding-top: 0; }
+</style>

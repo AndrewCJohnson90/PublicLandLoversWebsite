@@ -1,0 +1,34 @@
+---
+// Signature element: nested topographic contour lines, styled after USGS quad
+// sheets. Used as hero backdrop and section dividers throughout the site —
+// a direct, literal callback to the GIS/AGOL work the site exists to showcase.
+interface Props {
+  variant?: 'hero' | 'divider';
+  tone?: 'light' | 'dark';
+}
+const { variant = 'divider', tone = 'light' } = Astro.props as Props;
+
+const stroke = tone === 'dark' ? '#c1953f' : '#a44f21';
+const strokeSoft = tone === 'dark' ? 'rgba(193,149,63,0.35)' : 'rgba(92,107,79,0.4)';
+---
+
+{variant === 'hero' ? (
+  <svg class="contour contour-hero" viewBox="0 0 1200 480" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M-20,420 C180,380 260,460 420,400 C580,340 680,420 860,380 C1000,350 1080,400 1220,360" fill="none" stroke={strokeSoft} stroke-width="1.5"/>
+    <path d="M-20,360 C160,320 300,390 460,330 C620,270 720,350 880,310 C1020,280 1100,330 1220,300" fill="none" stroke={strokeSoft} stroke-width="1.5"/>
+    <path d="M-20,300 C150,260 320,320 480,270 C640,220 760,290 900,250 C1040,215 1110,260 1220,235" fill="none" stroke={stroke} stroke-width="2"/>
+    <path d="M-20,245 C160,205 330,255 500,215 C660,175 780,230 910,195 C1040,165 1110,195 1220,175" fill="none" stroke={strokeSoft} stroke-width="1.5"/>
+    <path d="M-20,190 C170,155 340,195 510,165 C670,135 790,175 920,145 C1040,120 1110,140 1220,120" fill="none" stroke={strokeSoft} stroke-width="1.5"/>
+  </svg>
+) : (
+  <svg class="contour contour-divider" viewBox="0 0 1200 60" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M0,40 C120,20 240,50 360,32 C480,14 600,44 720,28 C840,12 960,40 1080,24 C1140,16 1170,26 1200,20" fill="none" stroke={stroke} stroke-width="1.5"/>
+    <path d="M0,50 C120,32 240,58 360,42 C480,26 600,54 720,38 C840,22 960,50 1080,34 C1140,26 1170,36 1200,30" fill="none" stroke={strokeSoft} stroke-width="1"/>
+  </svg>
+)}
+
+<style>
+  .contour { display: block; width: 100%; height: auto; }
+  .contour-hero { max-height: 480px; }
+  .contour-divider { max-height: 60px; }
+</style>

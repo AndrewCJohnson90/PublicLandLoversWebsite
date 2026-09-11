@@ -10,28 +10,8 @@ export async function getStaticPaths() {
 
 const { entry } = Astro.props;
 const { Content } = await render(entry);
-
-const threatSchema = {
-  '@context': 'https://schema.org',
-  '@type': 'Article',
-  headline: entry.data.title,
-  description: entry.data.description,
-  ...(entry.data.pubDate ? { datePublished: entry.data.pubDate.toISOString() } : {}),
-  author: { '@type': 'Organization', name: 'Public Land Lovers' },
-  publisher: {
-    '@type': 'Organization',
-    name: 'Public Land Lovers',
-    logo: {
-      '@type': 'ImageObject',
-      url: new URL('/images/brand-avatar.jpg', Astro.site).toString(),
-    },
-  },
-  mainEntityOfPage: new URL(Astro.url.pathname, Astro.site).toString(),
-};
 ---
 <Base title={entry.data.title} description={entry.data.description}>
-  <script type="application/ld+json" set:html={JSON.stringify(threatSchema)} />
-
   <section class="section map-header">
     <div class="wrap">
       <p class="eyebrow">Threats to Public Lands</p>

@@ -10,7 +10,7 @@ const articles = (await getCollection('articles', notDraft))
   <section class="section hero-small">
     <div class="wrap">
       <p class="eyebrow">Field Notes</p>
-      <h1>Public Lands Field Notes &amp; Articles</h1>
+      <h1>Articles</h1>
       <p class="lede">Original writing on public lands policy, wild horse and burro management, and dispatches from the road.</p>
     </div>
   </section>
@@ -24,7 +24,7 @@ const articles = (await getCollection('articles', notDraft))
             <h3>{a.data.title}</h3>
             <p>{a.data.description}</p>
             {a.data.tags.length > 0 && (
-              <p class="tags">{a.data.tags.join(' &middot; ')}</p>
+              <p class="tags">{a.data.tags.join(' · ')}</p>
             )}
           </a>
         ))}

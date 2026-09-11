@@ -1,0 +1,233 @@
+---
+import Base from '../layouts/Base.astro';
+import Contour from '../components/Contour.astro';
+import { getCollection } from 'astro:content';
+import { notDraft } from '../lib/content';
+
+const articles = (await getCollection('articles', notDraft))
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+  .slice(0, 3);
+const maps = (await getCollection('maps', notDraft)).slice(0, 2);
+const threats = (await getCollection('threats', notDraft))
+  .sort((a, b) => a.data.order - b.data.order)
+  .slice(0, 3);
+---
+<Base title="Public Land Lovers">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">40.375&deg;N, 120.122&deg;W</p>
+        <h1>Public lands survive in our shared belief they are irreplaceable.</h1>
+        <p class="hero-sub">
+          Exploring the beauty, threats, and enormity of public lands across the US and beyond.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-solid" href="/public-land-threats/">Threats to Public Lands</a>
+          <a class="btn" href="/maps/">Explore the Maps</a>
+          <a class="btn" href="/articles/">Original Articles</a>
+        </div>
+      </div>
+    </div>
+    <Contour variant="hero" tone="light" />
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Field Notes</p>
+        <h2>Latest articles</h2>
+      </div>
+      <div class="grid-3">
+        {articles.map((a) => (
+          <a class="card article-card" href={`/articles/${a.id}/`}>
+            <p class="coord">{a.data.pubDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+            <h3>{a.data.title}</h3>
+            <p>{a.data.description}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <Contour variant="divider" tone="light" />
+
+  <section class="section section-dark">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Public Land Threats</p>
+        <h2>The places under the most pressure right now</h2>
+      </div>
+      <div class="grid-3">
+        {threats.map((t) => (
+          <a class="card threat-card" href={`/public-land-threats/${t.id}/`}>
+            <h3>{t.data.title}</h3>
+            <p>{t.data.description}</p>
+          </a>
+        ))}
+      </div>
+      <p class="section-cta"><a class="btn" href="/public-land-threats/">See all threats &rarr;</a></p>
+    </div>
+  </section>
+
+  <Contour variant="divider" tone="light" />
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Interactive Mapping</p>
+        <h2>Maps designed by PublicLandLovers for public land lovers. </h2>
+      </div>
+      <div class="grid-2">
+        {maps.map((m) => (
+          <a class="card map-card" href={`/maps/${m.id}/`}>
+            <h3>{m.data.title}</h3>
+            <p>{m.data.description}</p>
+            {m.data.region && <p class="coord">{m.data.region}</p>}
+          </a>
+        ))}
+      </div>
+      <p class="section-cta"><a class="btn" href="/maps/">See all maps &rarr;</a></p>
+    </div>
+  </section>
+
+  <section id="signup" class="section signup">
+    <div class="wrap signup-grid">
+      <div>
+        <p class="eyebrow">Stay in the loop</p>
+        <h2>Get the latest public land updates!</h2>
+        <p>New maps, articles, and current public land threats &mdash; straight to your inbox, nowhere else.</p>
+      </div>
+
+      <div class="signup-panel">
+        <!-- Real MailerLite embed structure/IDs preserved so their own
+             script (loaded below) can find and wire it up correctly —
+             this replaces an earlier custom fetch() attempt that MailerLite
+             silently rejected. Only the CSS is ours; the classes and IDs
+             below are required as-is for their script to work. -->
+        <div id="mlb2-45507042" class="ml-form-embedContainer ml-subscribe-form ml-subscribe-form-45507042">
+          <div class="row-form">
+            <form
+              class="ml-block-form signup-form"
+              action="https://assets.mailerlite.com/jsonp/2612152/forms/197531990852896749/subscribe"
+              data-code=""
+              method="post"
+              target="_blank"
+            >
+              <label for="email">Email</label>
+              <input
+                aria-label="email"
+                aria-required="true"
+                type="email"
+                id="email"
+                name="fields[email]"
+                placeholder="YourEmail@mail.com"
+                autocomplete="email"
+                required
+              />
+              <input type="hidden" name="ml-submit" value="1" />
+              <button class="btn btn-solid" type="submit">Join the list</button>
+              <input type="hidden" name="anticsrf" value="true" />
+            </form>
+          </div>
+          <div class="row-success signup-success" style="display:none">
+            <p>You're on the list &mdash; welcome aboard.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<script is:inline>
+  // Required global callback — MailerLite's own embed script calls this
+  // by name (ml_webform_success_45507042) once a submission succeeds.
+  function ml_webform_success_45507042() {
+    var $ = window.ml_jQuery || window.jQuery;
+    $('.ml-subscribe-form-45507042 .row-success').show();
+    $('.ml-subscribe-form-45507042 .row-form').hide();
+  }
+</script>
+<script is:inline src="https://groot.mailerlite.com/js/w/webforms.min.js?v83147fa8ce2d95cb73ece7f28b469519"></script>
+
+<style>
+  .hero {
+    position: relative;
+    padding-top: 5rem;
+    overflow: hidden;
+  }
+  .hero-grid { position: relative; z-index: 2; max-width: 46rem; padding-bottom: 3rem; }
+  .hero-sub { font-size: 1.15rem; color: var(--ink-soft); max-width: 38rem; }
+  .hero-actions { display: flex; gap: 1rem; margin-top: 1.5rem; flex-wrap: wrap; }
+
+  .section-head { max-width: 34rem; margin-bottom: 2.2rem; }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+  .article-card, .map-card, .threat-card {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+  }
+  .article-card:hover, .map-card:hover, .threat-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--rust);
+    text-decoration: none;
+  }
+  .section-dark .threat-card {
+    background: var(--dusk-dark);
+    border-color: rgba(255,255,255,0.12);
+  }
+  .section-dark .threat-card:hover { border-color: var(--ochre); }
+  .section-cta { margin-top: 1.75rem; }
+
+  .signup-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 2rem;
+    align-items: center;
+  }
+  .signup-form {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .signup-form label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+  .signup-form input[type="email"] {
+    max-width: 16rem;
+    font-family: var(--font-body);
+    font-size: 1rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--ink);
+    border-radius: 2px;
+  }
+  .row-success {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--sage-dark);
+  }
+
+  @media (max-width: 900px) {
+    .grid-3, .grid-2 { grid-template-columns: 1fr; }
+    .signup-grid { grid-template-columns: 1fr; }
+  }
+</style>
