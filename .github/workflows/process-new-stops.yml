@@ -1,0 +1,31 @@
+name: Process new van life stops
+
+# Runs daily, and can also be triggered manually from the Actions tab
+# (Run workflow button) right after adding new stops in Field Maps, if
+# you don't want to wait for the scheduled run.
+on:
+  schedule:
+    # 13:00 UTC ≈ 6am Pacific / 7am Mountain, adjust to taste.
+    - cron: "0 13 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  process-stops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install arcgis requests
+
+      - name: Process new stops
+        env:
+          AGOL_USERNAME: ${{ secrets.AGOL_USERNAME }}
+          AGOL_PASSWORD: ${{ secrets.AGOL_PASSWORD }}
+        run: python scripts/process_new_stops_process_seq.py
