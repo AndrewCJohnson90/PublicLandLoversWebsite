@@ -3,7 +3,8 @@ process_new_stops.py
 
 Process new Field Maps staging points into:
     1. Destination points in the real waypoints layer
-    2. Routed leg lines in the legs layer
+    2. Routed leg lines in the working/calculation legs layer
+    3. Final routed leg lines pushed to the production legs layer
 
 WORKFLOW
 --------
@@ -51,6 +52,7 @@ unprocessed until a destination is added.
 """
 
 import getpass
+import json
 import os
 import requests
 from datetime import datetime, timezone
@@ -77,10 +79,22 @@ POINTS_LAYER_URL = (
 )
 
 
-LEGS_LAYER_URL = (
+# Working/calculation legs layer.
+# The script continues to use this layer for the internal
+# route/calculation workflow.
+WORKING_LEGS_LAYER_URL = (
     "https://services8.arcgis.com/KzyxLudI6Hn5u85O/"
     "arcgis/rest/services/van_life_legs/"
     "FeatureServer/0"
+)
+
+# Production/published legs layer.
+# The finalized route is copied here after the working route
+# has been successfully created.
+PRODUCTION_LEGS_LAYER_URL = (
+    "https://services8.arcgis.com/KzyxLudI6Hn5u85O/"
+    "arcgis/rest/services/Janyne_and_Andrew_VanLife/"
+    "FeatureServer/1"
 )
 
 
@@ -98,6 +112,12 @@ FIELD_INPUT_LAYER_URL = (
 POINTS_FIELDS = {
     "cumulative_miles": "MilesTotal",
     "visit_date": "DateArrived",
+
+    # Field input -> production stop layer
+    "shower": "shower",
+    "laundry": "laundry",
+    "water": "water",
+    "nights_in_van": "nights_in_van",
 }
 
 
@@ -990,8 +1010,13 @@ def main():
         gis=gis,
     )
 
-    legs_layer = FeatureLayer(
-        LEGS_LAYER_URL,
+    working_legs_layer = FeatureLayer(
+        WORKING_LEGS_LAYER_URL,
+        gis=gis,
+    )
+
+    production_legs_layer = FeatureLayer(
+        PRODUCTION_LEGS_LAYER_URL,
         gis=gis,
     )
 
@@ -1009,9 +1034,14 @@ def main():
         "POINTS",
     )
 
-    legs_sr = get_layer_spatial_reference(
-        legs_layer,
-        "LEGS",
+    working_legs_sr = get_layer_spatial_reference(
+        working_legs_layer,
+        "WORKING LEGS",
+    )
+
+    production_legs_sr = get_layer_spatial_reference(
+        production_legs_layer,
+        "PRODUCTION LEGS",
     )
 
     field_input_sr = get_layer_spatial_reference(
@@ -1027,7 +1057,8 @@ def main():
 
     points_wkid = points_sr["wkid"]
 
-    legs_wkid = legs_sr["wkid"]
+    working_legs_wkid = working_legs_sr["wkid"]
+    production_legs_wkid = production_legs_sr["wkid"]
 
     print(
         f"\nInternal routing coordinate system: "
@@ -1040,8 +1071,13 @@ def main():
     )
 
     print(
-        f"Leg lines will be written "
-        f"using WKID {legs_wkid}."
+        f"Working leg lines will be written "
+        f"using WKID {working_legs_wkid}."
+    )
+
+    print(
+        f"Production leg lines will be written "
+        f"using WKID {production_legs_wkid}."
     )
 
     # --------------------------------------------------------
@@ -1272,7 +1308,7 @@ def main():
 
             stop_coords=stop_coords,
 
-            output_wkid=legs_wkid,
+            output_wkid=working_legs_wkid,
 
             labels=stop_labels,
         )
@@ -1378,6 +1414,14 @@ def main():
                 ]: date_epoch_ms,
 
                 "Miles_from_previous": leg_miles,
+
+                # Field input -> production stop layer
+                POINTS_FIELDS["shower"]: dest_attrs.get("shower"),
+                POINTS_FIELDS["laundry"]: dest_attrs.get("laundry"),
+                POINTS_FIELDS["water"]: dest_attrs.get("water"),
+                POINTS_FIELDS["nights_in_van"]: dest_attrs.get(
+                    "nights_in_van"
+                ),
             },
         }
 
@@ -1450,7 +1494,11 @@ def main():
             },
         }
 
-        line_result = legs_layer.edit_features(
+        # ========================================================
+        # ADD ROUTE LINE TO WORKING/CALCULATION LAYER
+        # ========================================================
+
+        line_result = working_legs_layer.edit_features(
             adds=[
                 line_feature
             ]
@@ -1469,14 +1517,139 @@ def main():
         ):
 
             raise RuntimeError(
-                "Failed to add leg line:\n"
+                "Failed to add leg line to the "
+                "working/calculation layer:\n"
                 f"{line_result}"
             )
 
         print(
-            f"  Added route line "
-            f"({len(via_coords)} via-point(s) "
-            "included)."
+            f"  Added route line to working layer "
+            f"({len(via_coords)} via-point(s) included)."
+        )
+
+        # ========================================================
+        # PUSH FINAL ROUTE TO PRODUCTION LEGS LAYER
+        # ========================================================
+        #
+        # The route was solved in the working layer's native
+        # spatial reference. If the production layer uses a
+        # different WKID, project the completed polyline before
+        # adding it to the production layer.
+        # ========================================================
+
+        production_geometry = route_geom
+
+        if working_legs_wkid != production_legs_wkid:
+
+            try:
+                geometry_url = (
+                    gis.properties
+                    .helperServices
+                    .geometry.url
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Could not find the ArcGIS Online Geometry "
+                    "Service required to project the final route "
+                    f"from WKID {working_legs_wkid} to "
+                    f"WKID {production_legs_wkid}."
+                ) from exc
+
+            projection_params = {
+                "f": "json",
+                "geometries": json.dumps({
+                    "geometryType": "esriGeometryPolyline",
+                    "geometries": [route_geom],
+                }),
+                "inSR": working_legs_wkid,
+                "outSR": production_legs_wkid,
+                "token": gis._con.token,
+            }
+
+            projection_response = requests.get(
+                f"{geometry_url.rstrip('/')}/project",
+                params=projection_params,
+                timeout=60,
+            )
+
+            projection_response.raise_for_status()
+
+            projection_data = projection_response.json()
+
+            if "error" in projection_data:
+                raise RuntimeError(
+                    "ArcGIS Geometry Service projection of the "
+                    "production route failed:\n"
+                    f"{projection_data['error']}"
+                )
+
+            projected_geometries = projection_data.get(
+                "geometries",
+                [],
+            )
+
+            if not projected_geometries:
+                raise RuntimeError(
+                    "Geometry Service returned no projected "
+                    "production route geometry."
+                )
+
+            production_geometry = projected_geometries[0]
+
+            production_geometry["spatialReference"] = {
+                "wkid": production_legs_wkid
+            }
+
+            print(
+                f"  Projected final route: "
+                f"WKID {working_legs_wkid} -> "
+                f"WKID {production_legs_wkid}"
+            )
+
+        else:
+            production_geometry["spatialReference"] = {
+                "wkid": production_legs_wkid
+            }
+
+        production_line_feature = {
+            "geometry": production_geometry,
+            "attributes": dict(
+                line_feature["attributes"]
+            ),
+        }
+
+        production_line_result = (
+            production_legs_layer.edit_features(
+                adds=[
+                    production_line_feature
+                ]
+            )
+        )
+
+        production_line_results = (
+            production_line_result.get(
+                "addResults",
+                [],
+            )
+        )
+
+        if (
+            not production_line_results
+            or not production_line_results[0].get(
+                "success"
+            )
+        ):
+            raise RuntimeError(
+                "Working route was created, but the final "
+                "route could not be added to the production "
+                "legs layer. Staging records were NOT marked "
+                "processed so this can be retried.\n"
+                f"{production_line_result}"
+            )
+
+        print(
+            f"  Pushed final route to production layer "
+            f"({len(via_coords)} via-point(s) included)."
         )
 
         # ====================================================
