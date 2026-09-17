@@ -56,6 +56,8 @@ import json
 import os
 import requests
 from datetime import datetime, timezone
+import tempfile
+from pathlib import Path
 
 from arcgis.gis import GIS
 from arcgis.features import FeatureLayer
@@ -395,6 +397,71 @@ def project_point(
             "wkid": output_wkid
         },
     }
+
+
+# ============================================================
+# COPY FEATURE ATTACHMENTS
+# ============================================================
+
+def copy_attachments(source_layer, source_oid, target_layer, target_oid, gis):
+    """Copy all Feature Service attachments from staging to production."""
+    source_attachments = source_layer.attachments.get_list(oid=source_oid)
+    if not source_attachments:
+        print(f"  No attachments found for staging OBJECTID {source_oid}.")
+        return 0
+
+    print(f"  Found {len(source_attachments)} attachment(s) for staging OBJECTID {source_oid}.")
+    copied = 0
+
+    with tempfile.TemporaryDirectory(prefix="quickcapture_attachments_") as temp_dir:
+        for attachment in source_attachments:
+            attachment_id = attachment.get("id")
+            attachment_name = attachment.get("name") or f"attachment_{attachment_id}"
+            if attachment_id is None:
+                raise RuntimeError(f"Attachment metadata is missing an id: {attachment}")
+
+            url = f"{source_layer.url.rstrip('/')}/{source_oid}/attachments/{attachment_id}"
+            response = requests.get(
+                url,
+                params={"token": gis._con.token, "f": "image"},
+                timeout=120,
+            )
+            response.raise_for_status()
+
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "json" in content_type or response.text[:20].strip().startswith("{"):
+                try:
+                    error_data = response.json()
+                except Exception:
+                    error_data = response.text[:500]
+                raise RuntimeError(
+                    f"Failed to download attachment {attachment_id} ({attachment_name}) "
+                    f"from staging OBJECTID {source_oid}:\n{error_data}"
+                )
+
+            safe_name = Path(attachment_name).name
+            local_path = Path(temp_dir) / safe_name
+            if local_path.exists():
+                local_path = Path(temp_dir) / f"{attachment_id}_{safe_name}"
+            local_path.write_bytes(response.content)
+
+            add_result = target_layer.attachments.add(target_oid, str(local_path))
+            if isinstance(add_result, dict):
+                result = add_result.get("addAttachmentResult", add_result)
+                success = result.get("success", False)
+            else:
+                success = bool(add_result)
+
+            if not success:
+                raise RuntimeError(
+                    f"Failed to add attachment {attachment_id} ({attachment_name}) "
+                    f"to production OBJECTID {target_oid}:\n{add_result}"
+                )
+
+            copied += 1
+            print(f"    Copied attachment {copied}/{len(source_attachments)}: {attachment_name}")
+
+    return copied
 
 
 # ============================================================
@@ -1025,6 +1092,10 @@ def main():
         gis=gis,
     )
 
+    print("\nAttachment support:")
+    print(f"  FIELD INPUT hasAttachments: {field_input_layer.properties.get('hasAttachments')}")
+    print(f"  POINTS hasAttachments: {points_layer.properties.get('hasAttachments')}")
+
     # --------------------------------------------------------
     # Spatial references
     # --------------------------------------------------------
@@ -1049,16 +1120,15 @@ def main():
         "FIELD INPUT",
     )
 
-    print_layer_spatial_references(
-        points_layer,
-        legs_layer,
-        field_input_layer,
-    )
-
     points_wkid = points_sr["wkid"]
-
     working_legs_wkid = working_legs_sr["wkid"]
     production_legs_wkid = production_legs_sr["wkid"]
+
+    print_layer_spatial_references(
+        points_layer,
+        working_legs_layer,
+        field_input_layer,
+    )
 
     print(
         f"\nInternal routing coordinate system: "
@@ -1451,6 +1521,28 @@ def main():
         print(
             f"  Added '{dest_name}' "
             f"as seq {new_seq}"
+        )
+
+        # QuickCapture/Field Maps photos and files are Feature Service
+        # attachments, so they must be copied separately from attributes.
+        production_oid = add_results[0].get("objectId")
+        if production_oid is None:
+            raise RuntimeError(
+                f"Destination '{dest_name}' was added, but ArcGIS did not "
+                "return its production OBJECTID; attachments cannot be copied safely."
+            )
+
+        copied_attachment_count = copy_attachments(
+            source_layer=field_input_layer,
+            source_oid=dest_attrs["OBJECTID"],
+            target_layer=points_layer,
+            target_oid=production_oid,
+            gis=gis,
+        )
+
+        print(
+            f"  Copied {copied_attachment_count} attachment(s) "
+            f"to production OBJECTID {production_oid}."
         )
 
         seq_counter += 1
