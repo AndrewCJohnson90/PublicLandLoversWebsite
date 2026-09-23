@@ -1,25 +1,28 @@
 name: Regenerate VanLife trip report
 
-# Runs on a schedule, and can also be triggered manually from the
-# Actions tab (Run workflow button) right after editing the feature
-# service, if you don't want to wait for the next scheduled run.
+# Prevent two copies of this workflow from trying to modify main at the same time.
+concurrency:
+  group: regenerate-vanlife-trip-report
+  cancel-in-progress: false
+
 on:
   schedule:
-    # Every 6 hours. Adjust the cron expression if you want it more
-    # or less frequent — e.g. '0 * * * *' for hourly.
-    - cron: "0 */6 * * *"
+    # Once per day at 6:00 AM UTC
+    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
-# Needed so the workflow can push the regenerated file back to the repo.
 permissions:
   contents: write
 
 jobs:
   regenerate:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,11 +40,22 @@ jobs:
       - name: Commit and push if the report changed
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add public/VanLife
+
           if git diff --cached --quiet; then
             echo "No changes to the trip report — nothing to commit."
-          else
-            git commit -m "Auto-regenerate VanLife trip report"
-            git push
+            exit 0
           fi
+
+          git commit -m "Auto-regenerate VanLife trip report"
+
+          # Make sure main hasn't changed since the workflow started.
+          git fetch origin main
+
+          # Replay our generated-report commit on top of the latest main.
+          git rebase origin/main
+
+          # Push the updated branch.
+          git push origin HEAD:main
