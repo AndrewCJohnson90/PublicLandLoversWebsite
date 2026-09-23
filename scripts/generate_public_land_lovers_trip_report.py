@@ -1,1255 +1,700 @@
+#!/usr/bin/env python3
 """
-process_new_stops_process_seq.py
+Public Land Lovers - Trip Report Generator
 
-Process new Field Maps staging points into:
-    1. Destination points in the real waypoints layer
-    2. Routed leg lines in the working/calculation legs layer
-    3. Final routed leg lines pushed to the production legs layer
+Generates a static HTML trip report from the Public Land Lovers
+ArcGIS Feature Service.
 
-WORKFLOW
---------
-Field Maps staging points are sorted by the user-defined
-STAGING_ORDER_FIELD (process_seq), lowest first.
+The report contains:
+    - Trip title and date range
+    - Trip statistics
+    - Interactive embedded ArcGIS Web Map
+    - Chronological stop-by-stop itinerary
+    - Mileage and drive-time information
+    - Notes and descriptions
+    - Land ownership / camping information
+    - Photo attachments
 
-process_seq is the authoritative processing order.
+The ArcGIS map is embedded using the ArcGIS Embeddable Map component.
 
-    - visit_date does NOT determine processing order.
-    - OBJECTID does NOT determine processing order.
-    - process_seq must be populated for every unprocessed record.
-    - Duplicate process_seq values are rejected to prevent ambiguity.
+Embedded Web Map:
+    Item ID:
+        5c7de7cbc28f4f1eaa2219732790c93a
 
-Each completed leg consists of:
-
-    via -> via -> destination
-
-The route is solved as:
-
-    last real waypoint
-        -> via 1
-        -> via 2
-        -> destination
-
-The order of via points is the order of process_seq.
-
-Coordinate-system handling:
-    - Coordinates are read from Feature Services as WGS 84 (4326).
-    - Routing inputs are WGS 84.
-    - Route output is requested in the native spatial reference
-      of the working/calculation legs layer.
-    - Destination points are projected into the native spatial
-      reference of the points layer before being added.
-    - Production route geometry is locally converted from
-      Web Mercator (3857) to WGS 84 (4326), avoiding the
-      ArcGIS Geometry Service token requirement.
-
-Drive_Minutes:
-    - Calculated from the ArcGIS route result.
-    - Represents the total routed driving time for the completed
-      leg, including any via points.
-    - Written to the destination point.
-    - Written to the working/calculation leg.
-    - Written to the production/published leg.
+    Portal:
+        https://pll.maps.arcgis.com
 
 IMPORTANT:
-    process_seq controls the order in which NEW staging records
-    are processed. The existing real waypoint layer is still
-    started from the waypoint with the highest existing seq.
+    The embedded map is intentionally NOT filtered by the report's
+    --segment, --state, --start-date, or --end-date arguments.
 
-    visit_date is retained as the actual date of the destination
-    and is written to the real waypoint and leg.
+    Those filters control the written report only.
 
-A trailing run of via-points with no destination is left
-unprocessed until a destination is added.
+Examples:
+
+    python generate_public_land_lovers_trip_report.py
+
+    python generate_public_land_lovers_trip_report.py --pdf
+
+    python generate_public_land_lovers_trip_report.py --inspect
+
+    python generate_public_land_lovers_trip_report.py --segment "Big Bend"
+
+    python generate_public_land_lovers_trip_report.py --state Texas
+
+    python generate_public_land_lovers_trip_report.py \
+        --start-date 2026-01-01 \
+        --end-date 2026-03-01
+
+Requirements:
+
+    python -m pip install requests
+
+Optional PDF support:
+
+    python -m pip install playwright
+    python -m playwright install chromium
 """
 
-import getpass
-import math
-import os
-import requests
-import tempfile
+from __future__ import annotations
 
+import argparse
+import html
+import json
+import math
+import re
+import time
+
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from arcgis.gis import GIS
-from arcgis.features import FeatureLayer
+import requests
 
 
-# ============================================================
+# ============================================================================
 # CONFIGURATION
-# ============================================================
+# ============================================================================
 
-AGOL_URL = "https://www.arcgis.com"
-
-USERNAME = "PublicLandLovers"
-
-PROFILE_NAME = "van_life_profile"
-
-
-POINTS_LAYER_URL = (
-    "https://services8.arcgis.com/KzyxLudI6Hn5u85O/"
-    "arcgis/rest/services/Janyne_and_Andrew_VanLife/"
-    "FeatureServer/0"
+LAYER_URL = (
+    "https://services8.arcgis.com/"
+    "KzyxLudI6Hn5u85O/arcgis/rest/services/"
+    "Janyne_and_Andrew_VanLife_Public/FeatureServer/0"
 )
 
+WEBSITE_URL = "https://publiclandlovers.com"
 
-# Working/calculation legs layer.
-# The script continues to use this layer for the internal
-# route/calculation workflow.
-WORKING_LEGS_LAYER_URL = (
-    "https://services8.arcgis.com/KzyxLudI6Hn5u85O/"
-    "arcgis/rest/services/van_life_legs/"
-    "FeatureServer/0"
+BRAND = "Public Land Lovers"
+
+AUTHORS = "Andrew & Janyne"
+
+OUTPUT_DIR = Path("public_land_lovers_report")
+
+REQUEST_TIMEOUT = 60
+
+RETRIES = 3
+
+PAGE_SIZE = 1000
+
+
+# --------------------------------------------------------------------------
+# EMBEDDED ARCGIS WEB MAP
+# --------------------------------------------------------------------------
+
+WEB_MAP_ITEM_ID = "5c7de7cbc28f4f1eaa2219732790c93a"
+
+ARCGIS_PORTAL_URL = "https://pll.maps.arcgis.com"
+
+ARCGIS_COMPONENT_SCRIPT = (
+    "https://js.arcgis.com/5.1/embeddable-components/"
 )
 
+# These are the settings supplied by the ArcGIS Online embed generator.
+ARCGIS_MAP_THEME = "light"
 
-# Production/published legs layer.
-# The finalized route is copied here after the working route
-# has been successfully created.
-PRODUCTION_LEGS_LAYER_URL = (
-    "https://services8.arcgis.com/KzyxLudI6Hn5u85O/"
-    "arcgis/rest/services/Janyne_and_Andrew_VanLife/"
-    "FeatureServer/1"
-)
+ARCGIS_MAP_CENTER = "-100.96733044185954,32.356554882199454"
 
+ARCGIS_MAP_SCALE = "36978595.47447219"
 
-FIELD_INPUT_LAYER_URL = (
-    "https://services8.arcgis.com/KzyxLudI6Hn5u85O/"
-    "arcgis/rest/services/van_life_field_input/"
-    "FeatureServer/0"
-)
+ARCGIS_MAP_HEIGHT = "600px"
 
 
-# ------------------------------------------------------------
-# Fields in the real waypoint layer
-# ------------------------------------------------------------
-
-POINTS_FIELDS = {
-    "cumulative_miles": "MilesTotal",
-    "visit_date": "DateArrived",
-
-    # Field input -> production stop layer
-    "shower": "shower",
-    "laundry": "laundry",
-    "water": "water",
-    "nights_in_van": "nights_in_van",
-
-    # Calculated from the ArcGIS route result
-    "drive_minutes": "Drive_Minutes",
-
-    # Field input -> production stop layer
-    "toilet": "toilet",
-    "segment": "Segment",
-}
+# None = all image attachments.
+MAX_PHOTOS_PER_STOP = None
 
 
-# ------------------------------------------------------------
-# USER-DEFINED FIELD IN THE STAGING LAYER
+# Report sections are grouped by this field.
+SECTION_FIELD = "Segment"
+
+
+# --------------------------------------------------------------------------
+# FIELDS INTENTIONALLY EXCLUDED
+# --------------------------------------------------------------------------
 #
-# This field is now the ONLY field used to determine the
-# processing order of unprocessed staging records.
+# DateLeft
+# Location__slept_
+# seq
+# wpt_id
+
+
+# nameOverride
+# vagueAddress
+# desc_
+# MediaLink
+# created_user
+# created_date
+# last_edited_user
+# last_edited_date
+# GlobalID
 #
-# Create this field in the staging layer as a numeric field.
-# Example values:
-#
-#     10
-#     20
-#     30
-#     40
-#
-# Leaving gaps makes it easy to insert a point later.
-# ------------------------------------------------------------
+# Internal camping/rating fields are also excluded unless explicitly added
+# later.
+# --------------------------------------------------------------------------
 
-STAGING_ORDER_FIELD = "process_seq"
 
+# ============================================================================
+# DATA CLASSES
+# ============================================================================
 
-# ------------------------------------------------------------
-# WGS 84
-# ------------------------------------------------------------
+@dataclass
+class Attachment:
+    attachment_id: int
+    name: str
+    content_type: str
+    size: int
+    url: str
 
-WGS84_WKID = 4326
 
+@dataclass
+class Stop:
+    object_id: int
+    attributes: dict[str, Any]
+    geometry: dict[str, Any] | None
+    attachments: list[Attachment]
 
-# ============================================================
-# LOGIN
-# ============================================================
 
-def get_gis():
-    """
-    Connect to ArcGIS Online.
+class ReportError(RuntimeError):
+    pass
 
-    Priority order:
-        1. AGOL_USERNAME / AGOL_PASSWORD environment variables,
-           if both are set.
-        2. A saved local profile.
-        3. An interactive password prompt as a last resort.
-    """
 
-    env_username = os.environ.get("AGOL_USERNAME")
-    env_password = os.environ.get("AGOL_PASSWORD")
+# ============================================================================
+# HTTP / ARCGIS
+# ============================================================================
 
-    if env_username and env_password:
+def request_json(
+    session: requests.Session,
+    url: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
 
-        gis = GIS(
-            AGOL_URL,
-            env_username,
-            env_password,
-        )
+    last_error = None
 
-        print(
-            f"Logged in via environment credentials as "
-            f"{gis.users.me.username}"
-        )
+    for attempt in range(1, RETRIES + 1):
 
-        return gis
+        try:
 
-    try:
-
-        gis = GIS(
-            profile=PROFILE_NAME
-        )
-
-        print(
-            f"Logged in via cached profile as "
-            f"{gis.users.me.username}"
-        )
-
-        return gis
-
-    except Exception:
-        pass
-
-    password = getpass.getpass(
-        f"AGOL password for {USERNAME}: "
-    )
-
-    gis = GIS(
-        AGOL_URL,
-        USERNAME,
-        password,
-        profile=PROFILE_NAME,
-    )
-
-    print(
-        f"Logged in and saved profile "
-        f"'{PROFILE_NAME}'."
-    )
-
-    return gis
-
-
-# ============================================================
-# SPATIAL REFERENCE HELPERS
-# ============================================================
-
-def get_layer_spatial_reference(
-    layer,
-    layer_name,
-):
-    """
-    Return the layer's native spatial reference.
-
-    Uses spatialReference directly instead of extent.
-    Some ArcGIS Online layers have extent=None.
-    """
-
-    sr = layer.properties.get(
-        "spatialReference"
-    )
-
-    if not sr:
-
-        raise RuntimeError(
-            f"Could not determine spatial reference "
-            f"for {layer_name}.\n\n"
-            f"Layer properties did not contain "
-            f"'spatialReference'."
-        )
-
-    wkid = (
-        sr.get("latestWkid")
-        or sr.get("wkid")
-    )
-
-    if not wkid:
-
-        raise RuntimeError(
-            f"Could not determine WKID for "
-            f"{layer_name}.\n"
-            f"Spatial reference returned:\n{sr}"
-        )
-
-    return {
-        "wkid": wkid,
-        "raw": sr,
-    }
-
-
-def print_layer_spatial_references(
-    points_layer,
-    legs_layer,
-    field_input_layer,
-):
-    """
-    Print native spatial references for all layers.
-    """
-
-    print("\nSpatial references:")
-
-    for layer, name in [
-        (points_layer, "POINTS"),
-        (legs_layer, "WORKING LEGS"),
-        (field_input_layer, "FIELD INPUT"),
-    ]:
-
-        sr = get_layer_spatial_reference(
-            layer,
-            name,
-        )
-
-        wkid = sr["wkid"]
-
-        print(
-            f"  {name}: WKID {wkid}"
-        )
-
-        if wkid in (3857, 102100):
-
-            print(
-                "       Web Mercator detected."
-            )
-
-        elif wkid == 4326:
-
-            print(
-                "       WGS 84 detected."
-            )
-
-        else:
-
-            print(
-                "       Other coordinate system detected."
-            )
-
-
-# ============================================================
-# PROJECT POINT
-# ============================================================
-
-def project_point(
-    gis,
-    x,
-    y,
-    input_wkid,
-    output_wkid,
-):
-    """
-    Project a single point using ArcGIS Online's
-    Geometry Service.
-
-    This remains in use for destination point projection.
-
-    Production route reprojection does NOT use this function;
-    the production route is converted locally from Web Mercator
-    to WGS84.
-    """
-
-    if input_wkid == output_wkid:
-
-        return {
-            "x": x,
-            "y": y,
-            "spatialReference": {
-                "wkid": output_wkid
-            },
-        }
-
-    try:
-
-        geometry_url = (
-            gis.properties
-            .helperServices
-            .geometry.url
-        )
-
-    except Exception as exc:
-
-        raise RuntimeError(
-            "Could not find the ArcGIS Online "
-            "Geometry Service required to project "
-            f"coordinates from WKID {input_wkid} "
-            f"to WKID {output_wkid}."
-        ) from exc
-
-    params = {
-        "f": "json",
-
-        "geometries": (
-            '{"geometryType":"esriGeometryPoint",'
-            '"geometries":['
-            f'{{"x":{x},"y":{y}}}'
-            "]}"
-        ),
-
-        "inSR": input_wkid,
-
-        "outSR": output_wkid,
-
-        "token": gis._con.token,
-    }
-
-    response = requests.get(
-        f"{geometry_url.rstrip('/')}/project",
-        params=params,
-        timeout=60,
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    if "error" in data:
-
-        raise RuntimeError(
-            "ArcGIS Geometry Service projection "
-            f"failed:\n{data['error']}"
-        )
-
-    geometries = data.get(
-        "geometries",
-        [],
-    )
-
-    if not geometries:
-
-        raise RuntimeError(
-            "Geometry Service returned no "
-            "projected geometry."
-        )
-
-    projected = geometries[0]
-
-    return {
-        "x": projected["x"],
-        "y": projected["y"],
-        "spatialReference": {
-            "wkid": output_wkid
-        },
-    }
-
-
-# ============================================================
-# LOCAL WEB MERCATOR -> WGS84 CONVERSION
-# ============================================================
-
-def web_mercator_to_wgs84_geometry(
-    geometry,
-):
-    """
-    Convert an ArcGIS polyline geometry from Web Mercator
-    (WKID 3857) to WGS84 (WKID 4326).
-
-    This conversion is performed locally and does not call
-    the ArcGIS Geometry Service.
-
-    ArcGIS Web Mercator coordinates:
-
-        x = meters east/west
-        y = meters north/south
-
-    Output:
-
-        x = longitude
-        y = latitude
-
-    The input geometry is not modified.
-    """
-
-    if not geometry:
-
-        raise RuntimeError(
-            "Cannot convert an empty route geometry."
-        )
-
-    paths = geometry.get(
-        "paths"
-    )
-
-    if not paths:
-
-        raise RuntimeError(
-            "Route geometry contains no paths."
-        )
-
-    earth_radius = 6378137.0
-
-    converted_paths = []
-
-    for path in paths:
-
-        converted_path = []
-
-        for point in path:
-
-            if len(point) < 2:
-
-                raise RuntimeError(
-                    f"Invalid route coordinate: {point}"
-                )
-
-            x = float(
-                point[0]
-            )
-
-            y = float(
-                point[1]
-            )
-
-            longitude = (
-                x
-                / earth_radius
-                * (180.0 / math.pi)
-            )
-
-            latitude = (
-                (
-                    2.0
-                    * math.atan(
-                        math.exp(
-                            y
-                            / earth_radius
-                        )
-                    )
-                    - math.pi / 2.0
-                )
-                * (180.0 / math.pi)
-            )
-
-            converted_path.append(
-                [
-                    longitude,
-                    latitude,
-                ]
-            )
-
-        converted_paths.append(
-            converted_path
-        )
-
-    return {
-        "paths": converted_paths,
-
-        "spatialReference": {
-            "wkid": WGS84_WKID
-        },
-    }
-
-
-# ============================================================
-# COPY FEATURE ATTACHMENTS
-# ============================================================
-
-def copy_attachments(
-    source_layer,
-    source_oid,
-    target_layer,
-    target_oid,
-    gis,
-):
-    """
-    Copy all Feature Service attachments from staging
-    to production.
-    """
-
-    source_attachments = (
-        source_layer.attachments.get_list(
-            oid=source_oid
-        )
-    )
-
-    if not source_attachments:
-
-        print(
-            f"  No attachments found for staging "
-            f"OBJECTID {source_oid}."
-        )
-
-        return 0
-
-    print(
-        f"  Found {len(source_attachments)} "
-        f"attachment(s) for staging OBJECTID "
-        f"{source_oid}."
-    )
-
-    copied = 0
-
-    with tempfile.TemporaryDirectory(
-        prefix="quickcapture_attachments_"
-    ) as temp_dir:
-
-        for attachment in source_attachments:
-
-            attachment_id = attachment.get(
-                "id"
-            )
-
-            attachment_name = (
-                attachment.get("name")
-                or f"attachment_{attachment_id}"
-            )
-
-            if attachment_id is None:
-
-                raise RuntimeError(
-                    "Attachment metadata is missing "
-                    f"an id: {attachment}"
-                )
-
-            url = (
-                f"{source_layer.url.rstrip('/')}/"
-                f"{source_oid}/attachments/"
-                f"{attachment_id}"
-            )
-
-            response = requests.get(
+            response = session.get(
                 url,
-                params={
-                    "token": gis._con.token,
-                    "f": "image",
-                },
-                timeout=120,
+                params=params,
+                timeout=REQUEST_TIMEOUT,
             )
 
             response.raise_for_status()
 
-            content_type = (
-                response.headers
-                .get(
-                    "Content-Type",
-                    "",
-                )
-                .lower()
-            )
+            data = response.json()
 
-            if (
-                "json" in content_type
-                or response.text[:20]
-                .strip()
-                .startswith("{")
-            ):
+            if data.get("error"):
 
-                try:
-
-                    error_data = (
-                        response.json()
-                    )
-
-                except Exception:
-
-                    error_data = (
-                        response.text[:500]
-                    )
-
-                raise RuntimeError(
-                    f"Failed to download attachment "
-                    f"{attachment_id} "
-                    f"({attachment_name}) "
-                    f"from staging OBJECTID "
-                    f"{source_oid}:\n"
-                    f"{error_data}"
-                )
-
-            safe_name = Path(
-                attachment_name
-            ).name
-
-            local_path = (
-                Path(temp_dir)
-                / safe_name
-            )
-
-            if local_path.exists():
-
-                local_path = (
-                    Path(temp_dir)
-                    / f"{attachment_id}_{safe_name}"
-                )
-
-            local_path.write_bytes(
-                response.content
-            )
-
-            add_result = (
-                target_layer.attachments.add(
-                    target_oid,
-                    str(local_path),
-                )
-            )
-
-            if isinstance(
-                add_result,
-                dict,
-            ):
-
-                result = (
-                    add_result.get(
-                        "addAttachmentResult",
-                        add_result,
+                raise ReportError(
+                    json.dumps(
+                        data["error"],
+                        indent=2,
                     )
                 )
 
-                success = result.get(
-                    "success",
-                    False,
-                )
+            return data
 
-            else:
+        except Exception as exc:
 
-                success = bool(
-                    add_result
-                )
+            last_error = exc
 
-            if not success:
+            if attempt < RETRIES:
+                time.sleep(attempt * 1.5)
 
-                raise RuntimeError(
-                    f"Failed to add attachment "
-                    f"{attachment_id} "
-                    f"({attachment_name}) "
-                    f"to production OBJECTID "
-                    f"{target_oid}:\n"
-                    f"{add_result}"
-                )
-
-            copied += 1
-
-            print(
-                f"    Copied attachment "
-                f"{copied}/{len(source_attachments)}: "
-                f"{attachment_name}"
-            )
-
-    return copied
-
-
-# ============================================================
-# GET LAST REAL WAYPOINT
-# ============================================================
-
-def get_last_point(
-    points_layer,
-):
-    """
-    Get the last real waypoint.
-
-    The existing waypoint with the highest seq is used as
-    the starting point for the newly processed records.
-
-    Geometry is explicitly requested as WGS84.
-    """
-
-    result = points_layer.query(
-        where="1=1",
-
-        out_fields="*",
-
-        order_by_fields="seq DESC",
-
-        result_record_count=1,
-
-        return_geometry=True,
-
-        out_sr=WGS84_WKID,
+    raise ReportError(
+        f"ArcGIS request failed:\n"
+        f"{url}\n"
+        f"{last_error}"
     )
 
-    if not result.features:
 
-        raise RuntimeError(
-            "Points layer is empty - add at least "
-            "one starting point manually first."
-        )
+def get_layer_info(
+    session: requests.Session,
+) -> dict[str, Any]:
 
-    feature = result.features[0]
-
-    attrs = feature.attributes
-
-    geometry = feature.geometry
-
-    return {
-        "seq": attrs["seq"],
-
-        "lat": geometry["y"],
-
-        "lon": geometry["x"],
-
-        "cumulative_miles": (
-            attrs.get(
-                POINTS_FIELDS[
-                    "cumulative_miles"
-                ]
-            )
-            or 0.0
-        ),
-
-        "name": (
-            attrs.get("nameOverride")
-            or attrs.get("name")
-            or f"Stop {attrs['seq']}"
-        ),
-    }
-
-
-# ============================================================
-# NEXT SEQUENCE NUMBER
-# ============================================================
-
-def next_seq(
-    points_layer,
-):
-    """
-    Find the next waypoint sequence number.
-    """
-
-    result = points_layer.query(
-        where="1=1",
-
-        out_fields="seq",
-
-        return_geometry=False,
+    return request_json(
+        session,
+        LAYER_URL,
+        {
+            "f": "json",
+        },
     )
 
-    if not result.features:
 
-        return 1
+# ============================================================================
+# QUERY STOPS
+# ============================================================================
 
-    sequences = []
+def query_stops(
+    session: requests.Session,
+    where: str,
+) -> list[dict[str, Any]]:
 
-    for feature in result.features:
+    query_url = f"{LAYER_URL}/query"
 
-        value = feature.attributes.get(
-            "seq"
-        )
+    ids = request_json(
+        session,
+        query_url,
+        {
+            "where": where,
+            "returnIdsOnly": "true",
+            "f": "json",
+        },
+    ).get("objectIds") or []
 
-        if value is not None:
+    ids = [int(x) for x in ids]
 
-            sequences.append(
-                value
-            )
+    if not ids:
+        return []
 
-    if not sequences:
+    features: list[dict[str, Any]] = []
 
-        return 1
-
-    return max(
-        sequences
-    ) + 1
-
-
-# ============================================================
-# VALIDATE COORDINATES
-# ============================================================
-
-def validate_coords(
-    stop_coords,
-    labels,
-):
-    """
-    Validate WGS84 latitude/longitude coordinates.
-    """
-
-    problems = []
-
-    for (lat, lon), label in zip(
-        stop_coords,
-        labels,
+    for start in range(
+        0,
+        len(ids),
+        PAGE_SIZE,
     ):
 
-        if lat is None or lon is None:
+        batch = ids[start:start + PAGE_SIZE]
 
-            problems.append(
-                f"  {label}: missing coordinate "
-                f"(lat={lat}, lon={lon})"
-            )
-
-        elif not (
-            -90 <= lat <= 90
-        ):
-
-            problems.append(
-                f"  {label}: lat={lat} is out of "
-                f"range - did lat/lon get swapped?"
-            )
-
-        elif not (
-            -180 <= lon <= 180
-        ):
-
-            problems.append(
-                f"  {label}: lon={lon} is out of "
-                f"range - did lat/lon get swapped?"
-            )
-
-        elif (
-            lat == 0
-            and lon == 0
-        ):
-
-            problems.append(
-                f"  {label}: coordinates are "
-                "exactly (0, 0) - likely failed."
-            )
-
-    if problems:
-
-        raise RuntimeError(
-            "Bad WGS84 coordinate(s) found "
-            "before calling the route service:\n"
-            + "\n".join(problems)
+        result = request_json(
+            session,
+            query_url,
+            {
+                "objectIds": ",".join(
+                    map(str, batch)
+                ),
+                "outFields": "*",
+                "returnGeometry": "true",
+                "f": "json",
+            },
         )
 
-
-# ============================================================
-# ROUTE SOLVER
-# ============================================================
-
-def solve_multistop(
-    gis,
-    stop_coords,
-    output_wkid,
-    labels=None,
-):
-    """
-    Solve a multi-stop route.
-
-    Input:
-        WGS84 latitude/longitude.
-
-    Output:
-        (
-            total_miles,
-            drive_minutes,
-            route_geometry
+        features.extend(
+            result.get("features", [])
         )
 
-    Drive time comes directly from the ArcGIS route
-    result and represents the total travel time for the
-    entire route.
+    return features
 
-    Stops are sent to the routing service in the exact order
-    supplied to this function.
-    """
 
-    if labels is None:
+# ============================================================================
+# ATTACHMENTS
+# ============================================================================
 
-        labels = [
-            f"point {i + 1}"
-            for i in range(
-                len(stop_coords)
-            )
-        ]
+def is_image_attachment(
+    name: str,
+    content_type: str,
+) -> bool:
 
-    validate_coords(
-        stop_coords,
-        labels,
+    extension = Path(name).suffix.lower()
+
+    content_type = (
+        content_type or ""
+    ).lower()
+
+    return (
+        content_type.startswith("image/")
+        or extension in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".heic",
+            ".heif",
+        }
     )
+
+
+def query_attachments(
+    session: requests.Session,
+    object_ids: list[int],
+) -> dict[int, list[Attachment]]:
+
+    result: dict[
+        int,
+        list[Attachment]
+    ] = defaultdict(list)
+
+    if not object_ids:
+        return result
+
+    for start in range(
+        0,
+        len(object_ids),
+        PAGE_SIZE,
+    ):
+
+        batch = object_ids[start:start + PAGE_SIZE]
+
+        data = request_json(
+            session,
+            f"{LAYER_URL}/queryAttachments",
+            {
+                "objectIds": ",".join(
+                    map(str, batch)
+                ),
+                "returnUrl": "false",
+                "f": "json",
+            },
+        )
+
+        for group in data.get(
+            "attachmentGroups",
+            [],
+        ):
+
+            parent_id = group.get(
+                "parentObjectId"
+            )
+
+            if parent_id is None:
+                continue
+
+            for info in group.get(
+                "attachmentInfos",
+                [],
+            ):
+
+                attachment_id = info.get("id")
+
+                name = (
+                    info.get("name")
+                    or "photo"
+                )
+
+                content_type = (
+                    info.get("contentType")
+                    or ""
+                )
+
+                if attachment_id is None:
+                    continue
+
+                if not is_image_attachment(
+                    name,
+                    content_type,
+                ):
+                    continue
+
+                url = (
+                    f"{LAYER_URL}/"
+                    f"{int(parent_id)}/attachments/"
+                    f"{int(attachment_id)}"
+                    f"?w=1800"
+                )
+
+                result[
+                    int(parent_id)
+                ].append(
+                    Attachment(
+                        attachment_id=int(
+                            attachment_id
+                        ),
+                        name=name,
+                        content_type=content_type,
+                        size=int(
+                            info.get("size")
+                            or 0
+                        ),
+                        url=url,
+                    )
+                )
+
+    for attachments in result.values():
+
+        attachments.sort(
+            key=lambda x: x.attachment_id
+        )
+
+    return result
+
+
+# ============================================================================
+# DATE / FIELD HELPERS
+# ============================================================================
+
+def parse_date(
+    value: Any,
+) -> datetime | None:
+
+    if value in (
+        None,
+        "",
+    ):
+        return None
+
+    if isinstance(
+        value,
+        (int, float),
+    ):
+
+        try:
+
+            return datetime.fromtimestamp(
+                float(value) / 1000,
+                tz=timezone.utc,
+            )
+
+        except Exception:
+            return None
+
+    text = str(value).strip()
+
+    formats = (
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+    )
+
+    for fmt in formats:
+
+        try:
+            return datetime.strptime(
+                text,
+                fmt,
+            )
+
+        except ValueError:
+            pass
+
+    return None
+
+
+def day_without_zero(
+    dt: datetime,
+) -> str:
+
+    return str(dt.day)
+
+
+def format_date(
+    value: Any,
+) -> str:
+
+    dt = parse_date(value)
+
+    if dt:
+
+        return (
+            f"{dt.strftime('%A')}, "
+            f"{dt.strftime('%B')} "
+            f"{day_without_zero(dt)}, "
+            f"{dt.year}"
+        )
+
+    if value not in (
+        None,
+        "",
+    ):
+
+        return str(value)
+
+    return ""
+
+
+def format_short_date(
+    value: Any,
+) -> str:
+
+    dt = parse_date(value)
+
+    if dt:
+
+        return dt.strftime(
+            "%m/%d/%Y"
+        )
+
+    if value not in (
+        None,
+        "",
+    ):
+
+        return str(value)
+
+    return ""
+
+
+def clean_text(
+    value: Any,
+) -> str:
+
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    if not text:
+        return ""
+
+    if text.lower() in {
+        "null",
+        "none",
+        "nan",
+        "n/a",
+        "na",
+    }:
+
+        return ""
+
+    return text
+
+
+def esc(
+    value: Any,
+) -> str:
+
+    return html.escape(
+        clean_text(value)
+    )
+
+
+def format_number(
+    value: Any,
+    decimals: int = 0,
+) -> str:
+
+    if value in (
+        None,
+        "",
+    ):
+        return ""
 
     try:
 
-        route_url = (
-            gis.properties
-            .helperServices
-            .route.url
-        )
+        number = float(value)
 
-    except AttributeError:
+        if not math.isfinite(number):
+            return ""
 
-        raise RuntimeError(
-            "No routing service configured "
-            "on this ArcGIS Online organization."
-        )
+        if decimals == 0:
 
-    solve_url = route_url.rstrip("/")
+            return f"{number:,.0f}"
 
-    if not solve_url.endswith(
-        "solve"
-    ):
-
-        solve_url += "/solve"
-
-    stops = ";".join(
-        f"{lon},{lat}"
-        for lat, lon in stop_coords
-    )
-
-    params = {
-        "f": "json",
-
-        "stops": stops,
-
-        "inSR": WGS84_WKID,
-
-        "outSR": output_wkid,
-
-        "returnRoutes": True,
-
-        "returnDirections": False,
-
-        "outputLines": (
-            "esriNAOutputLineTrueShape"
-        ),
-
-        "token": gis._con.token,
-    }
-
-    print(
-        f"  Routing WGS84 -> WKID "
-        f"{output_wkid}"
-    )
-
-    response = requests.get(
-        solve_url,
-        params=params,
-        timeout=120,
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    if "error" in data:
-
-        coord_dump = "\n".join(
-            f"  {label}: ({lat}, {lon})"
-            for (lat, lon), label
-            in zip(
-                stop_coords,
-                labels,
-            )
-        )
-
-        raise RuntimeError(
-            "Route service error:\n"
-            f"{data['error']}\n\n"
-            "Stops sent for this leg:\n"
-            f"{coord_dump}"
-        )
-
-    features = (
-        data
-        .get("routes", {})
-        .get("features", [])
-    )
-
-    if not features:
-
-        raise RuntimeError(
-            "Route service returned no route."
-        )
-
-    route_feature = features[0]
-
-    attrs = route_feature.get(
-        "attributes",
-        {},
-    )
-
-    # --------------------------------------------------------
-    # DISTANCE
-    # --------------------------------------------------------
-
-    miles = attrs.get(
-        "Total_Miles"
-    )
-
-    if miles is None:
-
-        km = attrs.get(
-            "Total_Kilometers"
-        )
-
-        if km is not None:
-
-            miles = (
-                km
-                * 0.621371
-            )
-
-    if miles is None:
-
-        raise RuntimeError(
-            "Could not find distance in "
-            f"route result:\n{attrs}"
-        )
-
-    # --------------------------------------------------------
-    # DRIVING TIME
-    #
-    # ArcGIS Network Analyst normally returns
-    # Total_TravelTime in minutes.
-    #
-    # Total_Minutes is also checked as a fallback in case
-    # the configured route service returns that field.
-    # --------------------------------------------------------
-
-    drive_minutes = attrs.get(
-        "Total_TravelTime"
-    )
-
-    if drive_minutes is None:
-
-        drive_minutes = attrs.get(
-            "Total_Minutes"
-        )
-
-    if drive_minutes is None:
-
-        raise RuntimeError(
-            "Could not find driving time in "
-            "route result.\n\n"
-            "Expected 'Total_TravelTime' "
-            "or 'Total_Minutes'.\n\n"
-            f"Route attributes returned:\n{attrs}"
-        )
-
-    try:
-
-        drive_minutes = float(
-            drive_minutes
+        return (
+            f"{number:,.{decimals}f}"
         )
 
     except (
         TypeError,
         ValueError,
-    ) as exc:
+    ):
 
-        raise RuntimeError(
-            "ArcGIS returned an invalid "
-            f"Drive_Minutes value: "
-            f"{drive_minutes!r}\n\n"
-            f"Route attributes:\n{attrs}"
-        ) from exc
-
-    # Keep a useful precision for route calculations.
-    # The value stored in the feature service is rounded
-    # to two decimal places below.
-    drive_minutes = round(
-        drive_minutes,
-        2,
-    )
-
-    # --------------------------------------------------------
-    # GEOMETRY
-    # --------------------------------------------------------
-
-    geometry = route_feature.get(
-        "geometry"
-    )
-
-    if not geometry:
-
-        raise RuntimeError(
-            "Route result contained no geometry."
-        )
-
-    geometry["spatialReference"] = {
-        "wkid": output_wkid
-    }
-
-    print(
-        f"  Route result: "
-        f"{round(float(miles), 2)} miles, "
-        f"{drive_minutes} minutes"
-    )
-
-    return (
-        float(miles),
-        drive_minutes,
-        geometry,
-    )
+        return clean_text(value)
 
 
-# ============================================================
-# FETCH UNPROCESSED STAGING POINTS
-# ============================================================
+def format_miles(
+    value: Any,
+) -> str:
 
-def fetch_unprocessed(
-    field_input_layer,
-):
-    """
-    Fetch all unprocessed staging points.
+    if value in (
+        None,
+        "",
+    ):
+        return ""
 
-    PROCESS ORDER:
-        process_seq ASC
+    try:
 
-    process_seq is the sole authority for ordering.
+        number = float(value)
 
-    visit_date is NOT used for sorting.
-    OBJECTID is NOT used as a tie-breaker.
+        if not math.isfinite(number):
+            return ""
 
-    Every unprocessed record must have a numeric process_seq.
-    Duplicate process_seq values are rejected.
-    """
+        if abs(
+            number - round(number)
+        ) < 0.05:
 
-    result = field_input_layer.query(
-        where=(
-            "processed = 0 "
-            "OR processed IS NULL"
-        ),
-
-        out_fields="*",
-
-        order_by_fields=(
-            f"{STAGING_ORDER_FIELD} ASC"
-        ),
-
-        return_geometry=True,
-
-        out_sr=WGS84_WKID,
-    )
-
-    features = result.features
-
-    missing = []
-
-    values = []
-
-    invalid = []
-
-    for feature in features:
-
-        attrs = feature.attributes
-
-        object_id = attrs.get(
-            "OBJECTID"
-        )
-
-        value = attrs.get(
-            STAGING_ORDER_FIELD
-        )
-
-        if value is None:
-
-            missing.append(
-                object_id
+            return (
+                f"{round(number):,} mi"
             )
 
-            continue
+        return (
+            f"{number:,.1f} mi"
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        text = clean_text(value)
+
+        if not text:
+            return ""
+
+        return f"{text} mi"
+
+
+def format_drive_time(
+    drive_time: Any,
+    drive_minutes: Any,
+) -> str:
+
+    text = clean_text(
+        drive_time
+    )
+
+    if text:
+        return text
+
+    if drive_minutes not in (
+        None,
+        "",
+    ):
 
         try:
 
-            numeric_value = float(
-                value
+            total = round(
+                float(drive_minutes)
             )
 
-            if numeric_value != numeric_value:
+            if total < 0:
+                return ""
 
-                raise ValueError
+            hours, minutes = divmod(
+                total,
+                60,
+            )
 
-            values.append(
-                (
-                    numeric_value,
-                    object_id,
+            if hours and minutes:
+
+                return (
+                    f"{hours} hr "
+                    f"{minutes} min"
                 )
+
+            if hours:
+
+                return (
+                    f"{hours} hr"
+                )
+
+            return (
+                f"{minutes} min"
             )
 
         except (
@@ -1257,954 +702,1976 @@ def fetch_unprocessed(
             ValueError,
         ):
 
-            invalid.append(
+            pass
+
+    return ""
+
+
+# ============================================================================
+# SORTING
+# ============================================================================
+
+def stop_sort_key(
+    stop: Stop,
+):
+
+    date_value = stop.attributes.get(
+        "DateArrived"
+    )
+
+    dt = parse_date(
+        date_value
+    )
+
+    if dt:
+
+        return (
+            0,
+            dt.timestamp(),
+            stop.object_id,
+        )
+
+    # Undated stops go at the end.
+    return (
+        1,
+        float("inf"),
+        stop.object_id,
+    )
+
+
+# ============================================================================
+# FILTERS
+# ============================================================================
+
+def sql_quote(
+    value: str,
+) -> str:
+
+    return (
+        "'"
+        + value.replace(
+            "'",
+            "''",
+        )
+        + "'"
+    )
+
+
+def build_where(
+    args: argparse.Namespace,
+) -> str:
+
+    clauses = [
+        "1=1"
+    ]
+
+    if args.segment:
+
+        clauses.append(
+            "Segment = "
+            + sql_quote(
+                args.segment
+            )
+        )
+
+    if args.state:
+
+        clauses.append(
+            "State_1 = "
+            + sql_quote(
+                args.state
+            )
+        )
+
+    if args.start_date:
+
+        clauses.append(
+            "DateArrived >= DATE "
+            + sql_quote(
+                args.start_date
+            )
+        )
+
+    if args.end_date:
+
+        clauses.append(
+            "DateArrived <= DATE "
+            + sql_quote(
+                args.end_date
+            )
+        )
+
+    return " AND ".join(
+        clauses
+    )
+
+
+# ============================================================================
+# REPORT STATISTICS
+# ============================================================================
+
+def numeric_values(
+    stops: list[Stop],
+    field: str,
+) -> list[float]:
+
+    values: list[float] = []
+
+    for stop in stops:
+
+        value = stop.attributes.get(
+            field
+        )
+
+        if value in (
+            None,
+            "",
+        ):
+            continue
+
+        try:
+
+            number = float(value)
+
+            if math.isfinite(number):
+                values.append(number)
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+    return values
+
+
+def total_numeric(
+    stops: list[Stop],
+    field: str,
+) -> float:
+
+    return sum(
+        numeric_values(
+            stops,
+            field,
+        )
+    )
+
+
+def get_trip_title(
+    stops: list[Stop],
+    args: argparse.Namespace,
+) -> str:
+
+    if args.title:
+        return args.title
+
+    if args.segment:
+        return args.segment
+
+    segments: list[str] = []
+
+    for stop in stops:
+
+        value = clean_text(
+            stop.attributes.get(
+                "Segment"
+            )
+        )
+
+        if (
+            value
+            and value not in segments
+        ):
+
+            segments.append(
+                value
+            )
+
+    if len(segments) == 1:
+        return segments[0]
+
+    return "Trip Report"
+
+
+def date_range_text(
+    stops: list[Stop],
+) -> str:
+
+    dates: list[datetime] = []
+
+    for stop in stops:
+
+        dt = parse_date(
+            stop.attributes.get(
+                "DateArrived"
+            )
+        )
+
+        if dt:
+            dates.append(dt)
+
+    if not dates:
+        return ""
+
+    first = min(dates)
+    last = max(dates)
+
+    if first.date() == last.date():
+
+        return (
+            f"{first.strftime('%B')} "
+            f"{day_without_zero(first)}, "
+            f"{first.year}"
+        )
+
+    return (
+        f"{first.strftime('%B')} "
+        f"{day_without_zero(first)}, "
+        f"{first.year}"
+        f" – "
+        f"{last.strftime('%B')} "
+        f"{day_without_zero(last)}, "
+        f"{last.year}"
+    )
+
+
+# ============================================================================
+# GROUPING
+# ============================================================================
+
+def group_by_segment(
+    stops: list[Stop],
+) -> list[
+    tuple[str, list[Stop]]
+]:
+
+    groups: dict[
+        str,
+        list[Stop]
+    ] = defaultdict(list)
+
+    for stop in stops:
+
+        segment = clean_text(
+            stop.attributes.get(
+                SECTION_FIELD
+            )
+        ) or "Other"
+
+        groups[
+            segment
+        ].append(stop)
+
+    result = list(
+        groups.items()
+    )
+
+    for _, values in result:
+
+        values.sort(
+            key=stop_sort_key
+        )
+
+    result.sort(
+        key=lambda item: (
+            stop_sort_key(
+                item[1][0]
+            )
+            if item[1]
+            else (
+                99,
+                float("inf"),
+                0,
+            )
+        )
+    )
+
+    return result
+
+
+# ============================================================================
+# ARCGIS EMBED
+# ============================================================================
+
+def build_arcgis_map_embed() -> str:
+
+    return f"""
+<div class="map-wrapper">
+    <div class="map-header">
+        <div>
+            <div class="map-title">
+                Trip Map
+            </div>
+            <div class="map-subtitle">
+                Explore the trip interactively
+            </div>
+        </div>
+
+        <div class="map-powered">
+            ArcGIS
+        </div>
+    </div>
+
+    <div class="map-container">
+        <arcgis-embedded-map
+            style="height:{html.escape(ARCGIS_MAP_HEIGHT)};width:100%;"
+            item-id="{html.escape(WEB_MAP_ITEM_ID)}"
+            theme="{html.escape(ARCGIS_MAP_THEME)}"
+            bookmarks-enabled
+            heading-enabled
+            legend-enabled
+            information-enabled
+            scroll-enabled
+            basemap-gallery-enabled
+            time-zone-label-enabled
+            center="{html.escape(ARCGIS_MAP_CENTER)}"
+            scale="{html.escape(ARCGIS_MAP_SCALE)}"
+            portal-url="{html.escape(ARCGIS_PORTAL_URL)}">
+        </arcgis-embedded-map>
+    </div>
+
+    <div class="map-note">
+        Interactive map provided by ArcGIS Online.
+        Use the map controls to pan, zoom, inspect locations,
+        and explore available map information.
+    </div>
+</div>
+""".strip()
+
+
+# ============================================================================
+# OPTIONAL FIELDS
+# ============================================================================
+
+def optional_field(
+    label: str,
+    value: Any,
+) -> str:
+
+    text = clean_text(value)
+
+    if not text:
+        return ""
+
+    return (
+        '<div class="optional-field">'
+        f'<span class="field-label">'
+        f'{esc(label)}'
+        f'</span>'
+        f'<span>{esc(text)}</span>'
+        '</div>'
+    )
+
+
+# ============================================================================
+# STOP HTML
+# ============================================================================
+
+def build_stop_html(
+    stop: Stop,
+    index: int,
+) -> str:
+
+    attributes = stop.attributes
+
+    name = (
+        clean_text(
+            attributes.get("name")
+        )
+        or "Unnamed stop"
+    )
+
+    description = clean_text(
+        attributes.get(
+            "description"
+        )
+    )
+
+    notes = clean_text(
+        attributes.get(
+            "Notes"
+        )
+    )
+
+    arrival = format_short_date(
+        attributes.get(
+            "DateArrived"
+        )
+    )
+
+    miles_total = format_miles(
+        attributes.get(
+            "MilesTotal"
+        )
+    )
+
+    miles_since = (
+        format_miles(
+            attributes.get(
+                "MilesSince"
+            )
+        )
+        or format_miles(
+            attributes.get(
+                "Miles_From_Previous"
+            )
+        )
+    )
+
+    drive_time = format_drive_time(
+        attributes.get(
+            "Drive_Time_From_Previous"
+        ),
+        attributes.get(
+            "Drive_Minutes"
+        ),
+    )
+
+    location = clean_text(
+        attributes.get(
+            "name"
+        )
+    )
+
+    state = clean_text(
+        attributes.get(
+            "State_1"
+        )
+    )
+
+    photos = stop.attachments
+
+    if MAX_PHOTOS_PER_STOP is not None:
+
+        photos = photos[
+            :MAX_PHOTOS_PER_STOP
+        ]
+
+    parts = [
+        '<article class="stop">',
+
+        '<div class="stop-heading">',
+
+        f'<div class="stop-number">'
+        f'{index}'
+        f'</div>',
+
+        '<div class="stop-heading-main">',
+
+        f'<h3>{esc(name)}</h3>',
+
+        '<div class="stop-location">',
+    ]
+
+    location_parts: list[str] = []
+
+    if location:
+        location_parts.append(
+            name
+        )
+
+    if state:
+        location_parts.append(
+            state
+        )
+
+    if location_parts:
+
+        parts.append(
+            esc(
+                ", ".join(
+                    location_parts
+                )
+            )
+        )
+
+    parts.extend(
+        [
+            '</div>',
+            '</div>',
+        ]
+    )
+
+    if arrival:
+
+        parts.append(
+            f'<div class="stop-date">'
+            f'{esc(arrival)}'
+            f'</div>'
+        )
+
+    parts.append(
+        '</div>'
+    )
+
+    # ----------------------------------------------------------------------
+    # METRICS
+    # ----------------------------------------------------------------------
+
+    metrics: list[str] = []
+
+    if miles_since:
+
+        metrics.append(
+            '<span>'
+            f'<b>{esc(miles_since)}</b>'
+            ' from previous'
+            '</span>'
+        )
+
+    if drive_time:
+
+        metrics.append(
+            '<span>'
+            f'<b>{esc(drive_time)}</b>'
+            ' drive'
+            '</span>'
+        )
+
+    if miles_total:
+
+        metrics.append(
+            '<span>'
+            f'<b>{esc(miles_total)}</b>'
+            ' total'
+            '</span>'
+        )
+
+    if metrics:
+
+        parts.append(
+            '<div class="metrics">'
+            + "".join(metrics)
+            + '</div>'
+        )
+
+    # ----------------------------------------------------------------------
+    # DESCRIPTION
+    # ----------------------------------------------------------------------
+
+    if description:
+
+        parts.append(
+            '<div class="description">'
+            f'{esc(description)}'
+            '</div>'
+        )
+
+    # ----------------------------------------------------------------------
+    # NOTES
+    # ----------------------------------------------------------------------
+
+    if notes:
+
+        parts.append(
+            '<div class="notes">'
+            '<strong>Notes:</strong> '
+            f'{esc(notes)}'
+            '</div>'
+        )
+
+    # ----------------------------------------------------------------------
+    # SECONDARY FIELDS
+    # ----------------------------------------------------------------------
+
+    optional = "".join(
+        [
+            optional_field(
+                "Land Ownership",
+                attributes.get(
+                    "Land_Ownership"
+                ),
+            ),
+
+            optional_field(
+                "Stop Type",
+                attributes.get(
+                    "category"
+                ),
+            ),
+
+            optional_field(
+                "Type",
+                attributes.get(
+                    "type"
+                ),
+            ),
+        ]
+    )
+
+    if optional:
+
+        parts.append(
+            '<div class="optional-fields">'
+            f'{optional}'
+            '</div>'
+        )
+
+    # ----------------------------------------------------------------------
+    # PHOTOS
+    # ----------------------------------------------------------------------
+
+    if photos:
+
+        parts.append(
+            '<div class="photos">'
+        )
+
+        for photo in photos:
+
+            alt = (
+                f"{name} — "
+                f"{photo.name}"
+            )
+
+            parts.append(
+                '<figure class="photo-figure">'
+                f'<img '
+                f'src="{html.escape(photo.url, quote=True)}" '
+                f'alt="{esc(alt)}" '
+                'loading="lazy">'
+                '</figure>'
+            )
+
+        parts.append(
+            '</div>'
+        )
+
+    parts.append(
+        '</article>'
+    )
+
+    return "".join(parts)
+
+
+# ============================================================================
+# CSS
+# ============================================================================
+
+CSS = r"""
+@page {
+    size: Letter;
+    margin: 0.42in;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background: #ffffff;
+    color: #333333;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 10.5pt;
+    line-height: 1.38;
+}
+
+.report {
+    max-width: 8.0in;
+    margin: 0 auto;
+    padding: 0.35in 0.48in;
+}
+
+.topline {
+    display: flex;
+    justify-content: space-between;
+    color: #777777;
+    font: 8pt Arial, sans-serif;
+    margin-bottom: 0.20in;
+}
+
+.brand {
+    color: #7b8730;
+    font: 700 22pt Arial, sans-serif;
+    letter-spacing: .2px;
+}
+
+.brand-subtitle {
+    color: #777777;
+    font: 9pt Arial, sans-serif;
+    margin-top: 2px;
+}
+
+.brand-subtitle a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.hero {
+    text-align: center;
+    margin: 0.24in 0 0.24in;
+}
+
+.hero h1 {
+    font-size: 28pt;
+    line-height: 1.05;
+    font-weight: 400;
+    margin: 0 0 8px;
+}
+
+.date-range {
+    color: #777777;
+    font-size: 10pt;
+    margin-bottom: 12px;
+}
+
+.summary {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 20px;
+    font-family: Arial, sans-serif;
+    color: #777777;
+}
+
+.summary-item strong {
+    color: #7b8730;
+    font-size: 14pt;
+    margin-right: 4px;
+}
+
+
+/* ========================================================================
+   INTERACTIVE MAP
+   ======================================================================== */
+
+.map-wrapper {
+    width: 100%;
+    margin: 0 0 0.35in;
+    border: 1px solid #e1e3dd;
+    border-radius: 7px;
+    overflow: hidden;
+    background: #ffffff;
+    break-inside: avoid;
+}
+
+.map-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    padding: 10px 14px;
+    background: #f4f5f1;
+    border-bottom: 1px solid #e1e3dd;
+}
+
+.map-title {
+    font: 700 11pt Arial, sans-serif;
+    color: #333333;
+}
+
+.map-subtitle {
+    font: 8.5pt Arial, sans-serif;
+    color: #777777;
+    margin-top: 2px;
+}
+
+.map-powered {
+    font: 700 8pt Arial, sans-serif;
+    color: #777777;
+}
+
+.map-container {
+    width: 100%;
+    height: 600px;
+    background: #f4f5f1;
+}
+
+.map-container arcgis-embedded-map {
+    display: block;
+    width: 100%;
+    height: 600px;
+}
+
+.map-note {
+    padding: 7px 12px;
+    color: #888888;
+    background: #fafaf8;
+    border-top: 1px solid #e7e8e3;
+    font: 7.5pt Arial, sans-serif;
+}
+
+
+/* ========================================================================
+   SECTIONS
+   ======================================================================== */
+
+.section {
+    margin-top: 0.22in;
+}
+
+.section-header {
+    border-bottom: 1.5px solid #7b8730;
+    margin-bottom: 0.14in;
+    padding-bottom: 5px;
+}
+
+.section-title {
+    margin: 0;
+    color: #333333;
+    font-size: 17pt;
+    font-weight: 500;
+}
+
+.section-summary {
+    color: #888888;
+    font-size: 9pt;
+    margin-top: 2px;
+}
+
+
+/* ========================================================================
+   STOPS
+   ======================================================================== */
+
+.stop {
+    break-inside: avoid;
+    margin: 0 0 0.22in;
+}
+
+.stop-heading {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+}
+
+.stop-number {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 50%;
+    background: #7b8730;
+    color: #ffffff;
+    font: 700 9pt Arial, sans-serif;
+    margin-top: 1px;
+}
+
+.stop-heading-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.stop h3 {
+    font-size: 12pt;
+    margin: 0;
+    font-weight: 700;
+}
+
+.stop-location {
+    color: #777777;
+    font-size: 9pt;
+    margin-top: 1px;
+}
+
+.stop-date {
+    white-space: nowrap;
+    color: #555555;
+    font: 9pt Arial, sans-serif;
+    padding-top: 2px;
+}
+
+.metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 16px;
+    margin: 6px 0 5px 31px;
+    color: #777777;
+    font: 8.8pt Arial, sans-serif;
+}
+
+.metrics b {
+    color: #7b8730;
+}
+
+.description {
+    margin-left: 31px;
+    color: #444444;
+}
+
+.notes {
+    margin: 5px 0 0 31px;
+    color: #666666;
+    font-size: 9pt;
+}
+
+.optional-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 16px;
+    margin: 7px 0 0 31px;
+    color: #666666;
+    font: 8.5pt Arial, sans-serif;
+}
+
+.optional-field {
+    display: inline-flex;
+    gap: 4px;
+}
+
+.field-label {
+    font-weight: 700;
+    color: #7b8730;
+}
+
+
+/* ========================================================================
+   PHOTOS
+   ======================================================================== */
+
+.photos {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 10px 0 0 31px;
+}
+
+.photo-figure {
+    margin: 0;
+    break-inside: avoid;
+}
+
+.photo-figure img {
+    width: 100%;
+    max-height: 3.1in;
+    object-fit: cover;
+    border-radius: 4px;
+    display: block;
+}
+
+
+/* ========================================================================
+   FOOTER
+   ======================================================================== */
+
+.footer {
+    border-top: 1px solid #e5e5e5;
+    margin-top: .25in;
+    padding-top: 6px;
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    color: #888888;
+    font: 7.5pt Arial, sans-serif;
+}
+
+
+/* ========================================================================
+   SCREEN
+   ======================================================================== */
+
+@media screen {
+
+    body {
+        background: #eeeeec;
+    }
+
+    .report {
+        min-height: 100vh;
+        background: white;
+        box-shadow: 0 2px 20px rgba(0,0,0,.08);
+    }
+
+}
+
+
+/* ========================================================================
+   RESPONSIVE
+   ======================================================================== */
+
+@media screen and (max-width: 700px) {
+
+    .report {
+        padding: 0.25in 0.20in;
+    }
+
+    .topline {
+        font-size: 7pt;
+    }
+
+    .brand {
+        font-size: 19pt;
+    }
+
+    .hero h1 {
+        font-size: 23pt;
+    }
+
+    .map-container,
+    .map-container arcgis-embedded-map {
+        height: 500px;
+    }
+
+    .stop-heading {
+        gap: 7px;
+    }
+
+    .stop-date {
+        font-size: 8pt;
+    }
+
+    .photos {
+        grid-template-columns: 1fr;
+    }
+
+}
+
+
+/* ========================================================================
+   PRINT
+   ======================================================================== */
+
+@media print {
+
+    body {
+        background: white;
+    }
+
+    .report {
+        max-width: none;
+        padding: 0;
+        box-shadow: none;
+    }
+
+    /*
+       The ArcGIS map is interactive only in the HTML version.
+       Hide it when printing so the report doesn't attempt to print
+       the live web application.
+    */
+
+    .map-wrapper {
+        display: none !important;
+    }
+
+}
+"""
+
+
+# ============================================================================
+# BUILD REPORT
+# ============================================================================
+
+def build_report(
+    stops: list[Stop],
+    layer_info: dict[str, Any],
+    args: argparse.Namespace,
+) -> str:
+
+    title = get_trip_title(
+        stops,
+        args,
+    )
+
+    # ----------------------------------------------------------------------
+    # TOTAL TRIP MILEAGE
+    # ----------------------------------------------------------------------
+
+    cumulative_miles = numeric_values(
+        stops,
+        "MilesTotal",
+    )
+
+    if cumulative_miles:
+
+        total_trip_miles = max(
+            cumulative_miles
+        )
+
+    else:
+
+        total_trip_miles = total_numeric(
+            stops,
+            "MilesTotal",
+        )
+
+    # ----------------------------------------------------------------------
+    # SEGMENT MILEAGE
+    # ----------------------------------------------------------------------
+
+    total_segment_miles = total_numeric(
+        stops,
+        "MilesSince",
+    )
+
+    if total_segment_miles == 0:
+
+        total_segment_miles = total_numeric(
+            stops,
+            "Miles_From_Previous",
+        )
+
+    # ----------------------------------------------------------------------
+    # GROUPS
+    # ----------------------------------------------------------------------
+
+    groups = group_by_segment(
+        stops
+    )
+
+    # ----------------------------------------------------------------------
+    # PHOTOS
+    # ----------------------------------------------------------------------
+
+    image_count = sum(
+        len(stop.attachments)
+        for stop in stops
+    )
+
+    # ----------------------------------------------------------------------
+    # GENERATED DATE
+    # ----------------------------------------------------------------------
+
+    generated = datetime.now().strftime(
+        "%m/%d/%Y %I:%M %p"
+    ).lstrip("0")
+
+    # ----------------------------------------------------------------------
+    # START HTML
+    # ----------------------------------------------------------------------
+
+    parts = [
+        "<!doctype html>",
+
+        '<html lang="en">',
+
+        "<head>",
+
+        '<meta charset="utf-8">',
+
+        (
+            '<meta name="viewport" '
+            'content="width=device-width,initial-scale=1">'
+        ),
+
+        (
+            '<meta name="description" '
+            f'content="{esc(title)} — {esc(BRAND)}">'
+        ),
+
+        # Intentionally unlisted: not linked from site nav, and excluded
+        # from search indexing so it's only reachable via direct link.
+        '<meta name="robots" content="noindex, nofollow">',
+
+        (
+            '<title>'
+            f'{esc(title)} — {esc(BRAND)}'
+            '</title>'
+        ),
+
+        f"<style>{CSS}</style>",
+
+        # ------------------------------------------------------------------
+        # ArcGIS Embeddable Map Component
+        # ------------------------------------------------------------------
+
+        (
+            '<script type="module" '
+            f'src="{html.escape(ARCGIS_COMPONENT_SCRIPT, quote=True)}">'
+            '</script>'
+        ),
+
+        "</head>",
+
+        "<body>",
+
+        '<main class="report">',
+
+        # ------------------------------------------------------------------
+        # Topline
+        # ------------------------------------------------------------------
+
+        (
+            '<div class="topline">'
+            f'<span>{esc(generated)}</span>'
+            f'<span>{esc(AUTHORS)}</span>'
+            '</div>'
+        ),
+
+        # ------------------------------------------------------------------
+        # Brand
+        # ------------------------------------------------------------------
+
+        f'<div class="brand">{esc(BRAND)}</div>',
+
+        (
+            '<div class="brand-subtitle">'
+            f'<a href="{html.escape(WEBSITE_URL, quote=True)}">'
+            f'{esc(WEBSITE_URL)}'
+            '</a>'
+            '</div>'
+        ),
+
+        # ------------------------------------------------------------------
+        # Hero
+        # ------------------------------------------------------------------
+
+        '<section class="hero">',
+
+        f"<h1>{esc(title)}</h1>",
+
+        (
+            '<div class="date-range">'
+            f'{esc(date_range_text(stops))}'
+            '</div>'
+        ),
+
+        '<div class="summary">',
+
+        (
+            '<span class="summary-item">'
+            f'<strong>'
+            f'{format_number(total_trip_miles)}'
+            f'</strong> mi'
+            '</span>'
+        ),
+
+        (
+            '<span class="summary-item">'
+            f'<strong>{len(stops):,}</strong> stops'
+            '</span>'
+        ),
+
+        (
+            '<span class="summary-item">'
+            f'<strong>{len(groups):,}</strong> sections'
+            '</span>'
+        ),
+
+        (
+            '<span class="summary-item">'
+            f'<strong>{image_count:,}</strong> photos'
+            '</span>'
+        ),
+
+        '</div>',
+
+        '</section>',
+
+        # ------------------------------------------------------------------
+        # INTERACTIVE ARCGIS MAP
+        # ------------------------------------------------------------------
+
+        build_arcgis_map_embed(),
+    ]
+
+    # =========================================================================
+    # SECTIONS
+    # =========================================================================
+
+    running_index = 0
+
+    for (
+        section_name,
+        section_stops,
+    ) in groups:
+
+        # ---------------------------------------------------------------
+        # Segment mileage
+        # ---------------------------------------------------------------
+
+        section_miles_values = numeric_values(
+            section_stops,
+            "MilesSince",
+        )
+
+        if not section_miles_values:
+
+            section_miles_values = numeric_values(
+                section_stops,
+                "Miles_From_Previous",
+            )
+
+        section_miles = sum(
+            section_miles_values
+        )
+
+        # ---------------------------------------------------------------
+        # Section header
+        # ---------------------------------------------------------------
+
+        parts.extend(
+            [
+                '<section class="section">',
+
+                '<div class="section-header">',
+
                 (
-                    object_id,
-                    value,
+                    '<h2 class="section-title">'
+                    f'{esc(section_name)}'
+                    '</h2>'
+                ),
+
+                (
+                    '<div class="section-summary">'
+                    f'{len(section_stops):,} stops'
+                    + (
+                        f' · '
+                        f'{format_number(section_miles, 1)} mi'
+                        if section_miles
+                        else ""
+                    )
+                    + '</div>'
+                ),
+
+                '</div>',
+            ]
+        )
+
+        # ---------------------------------------------------------------
+        # Stops
+        # ---------------------------------------------------------------
+
+        for stop in section_stops:
+
+            running_index += 1
+
+            parts.append(
+                build_stop_html(
+                    stop,
+                    running_index,
                 )
             )
 
-    if missing:
-
-        raise RuntimeError(
-            f"Unprocessed staging record(s) are missing "
-            f"'{STAGING_ORDER_FIELD}': "
-            f"{missing}\n\n"
-            "Populate process_seq for every unprocessed "
-            "record before running the script."
+        parts.append(
+            "</section>"
         )
 
-    if invalid:
+    # =========================================================================
+    # FOOTER
+    # =========================================================================
 
-        details = "\n".join(
-            f"  OBJECTID={oid}: "
-            f"{value!r}"
-            for oid, value
-            in invalid
+    parts.extend(
+        [
+            '<footer class="footer">',
+
+            (
+                '<span>'
+                f'{esc(BRAND)} · '
+                f'{esc(WEBSITE_URL)}'
+                '</span>'
+            ),
+
+            (
+                '<span>'
+                f'{len(stops):,} stops · '
+                f'{image_count:,} photos'
+                '</span>'
+            ),
+
+            '</footer>',
+
+            '</main>',
+
+            '</body>',
+
+            '</html>',
+        ]
+    )
+
+    return "".join(parts)
+
+
+# ============================================================================
+# OPTIONAL PDF
+# ============================================================================
+
+def generate_pdf(
+    html_path: Path,
+    pdf_path: Path,
+) -> None:
+
+    try:
+
+        from playwright.sync_api import (
+            sync_playwright
         )
 
-        raise RuntimeError(
-            f"Invalid values found in "
-            f"'{STAGING_ORDER_FIELD}':\n"
-            f"{details}\n\n"
-            "The field must contain numeric values."
+    except ImportError as exc:
+
+        raise ReportError(
+            "Playwright is not installed.\n\n"
+            "Run:\n"
+            "  python -m pip install playwright\n"
+            "  python -m playwright install chromium"
+        ) from exc
+
+    with sync_playwright() as playwright:
+
+        browser = playwright.chromium.launch()
+
+        page = browser.new_page()
+
+        page.goto(
+            html_path.resolve().as_uri(),
+            wait_until="networkidle",
+            timeout=120000,
         )
 
-    seen = {}
-
-    for value, object_id in values:
-
-        seen.setdefault(
-            value,
-            []
-        ).append(
-            object_id
+        page.wait_for_timeout(
+            1500
         )
 
-    duplicates = {
-        value: object_ids
-        for value, object_ids
-        in seen.items()
-        if len(object_ids) > 1
-    }
+        # Wait for normal images.
+        page.evaluate(
+            """
+            () => Promise.all(
+                Array.from(document.images).map(img => {
+                    if (img.complete) {
+                        return Promise.resolve();
+                    }
 
-    if duplicates:
+                    return new Promise(resolve => {
+                        img.onload = resolve;
+                        img.onerror = resolve;
+                    });
+                })
+            )
+            """
+        )
 
-        details = "\n".join(
-            f"  process_seq={value}: "
-            f"OBJECTIDs={object_ids}"
-            for value, object_ids
-            in sorted(
-                duplicates.items()
+        page.pdf(
+            path=str(
+                pdf_path.resolve()
+            ),
+            format="Letter",
+            print_background=True,
+            prefer_css_page_size=True,
+            margin={
+                "top": "0.42in",
+                "right": "0.42in",
+                "bottom": "0.42in",
+                "left": "0.42in",
+            },
+        )
+
+        browser.close()
+
+
+# ============================================================================
+# INSPECTION
+# ============================================================================
+
+def inspect_layer(
+    layer_info: dict[str, Any],
+) -> None:
+
+    print()
+    print("=" * 88)
+    print(
+        "PUBLIC LAND LOVERS — "
+        "PublicLandLovers_Stops"
+    )
+    print("=" * 88)
+
+    print(
+        "Geometry:       ",
+        layer_info.get(
+            "geometryType"
+        ),
+    )
+
+    spatial_reference = (
+        layer_info.get(
+            "extent",
+            {}
+        ).get(
+            "spatialReference",
+            {}
+        ).get(
+            "wkid"
+        )
+    )
+
+    if spatial_reference is None:
+
+        spatial_reference = (
+            layer_info.get(
+                "spatialReference",
+                {}
+            ).get(
+                "wkid"
             )
         )
 
-        raise RuntimeError(
-            "Duplicate process_seq values found:\n"
-            f"{details}\n\n"
-            "Each unprocessed staging point must have a "
-            "unique process_seq so the route order is "
-            "unambiguous."
-        )
-
     print(
-        f"\nStaging point order "
-        f"(controlled by {STAGING_ORDER_FIELD}):"
+        "Spatial ref:    ",
+        spatial_reference,
     )
 
-    for index, feature in enumerate(
-        features,
-        start=1,
+    print(
+        "Attachments:    ",
+        layer_info.get(
+            "hasAttachments"
+        ),
+    )
+
+    print(
+        "Record limit:   ",
+        layer_info.get(
+            "maxRecordCount"
+        ),
+    )
+
+    print()
+    print("Fields")
+    print("-" * 88)
+
+    for field in layer_info.get(
+        "fields",
+        [],
     ):
 
-        attrs = feature.attributes
-
         print(
-            f"  {index}. "
-            f"process_seq="
-            f"{attrs.get(STAGING_ORDER_FIELD)} "
-            f"OBJECTID={attrs.get('OBJECTID')} "
-            f"role={attrs.get('role')} "
-            f"visit_date={attrs.get('visit_date')}"
+            f"{field.get('name'):30} | "
+            f"{field.get('alias')} | "
+            f"{field.get('type')}"
         )
 
-    return features
+    print()
+    print(
+        "Report fields intentionally used"
+    )
+    print("-" * 88)
+
+    for field in [
+        "name",
+        "description",
+        "DateArrived",
+        "MilesTotal",
+        "MilesSince",
+        "Miles_From_Previous",
+        "Drive_Time_From_Previous",
+        "Drive_Minutes",
+        "Segment",
+        "Location",
+        "State_1",
+        "Notes",
+        "camp_spot",
+        "Land_Ownership",
+        "category",
+        "type",
+    ]:
+
+        print(
+            f"  {field}"
+        )
+
+    print()
+    print(
+        "Embedded ArcGIS Web Map"
+    )
+    print("-" * 88)
+
+    print(
+        f"  Item ID: {WEB_MAP_ITEM_ID}"
+    )
+
+    print(
+        f"  Portal:  {ARCGIS_PORTAL_URL}"
+    )
+
+    print(
+        f"  Center:  {ARCGIS_MAP_CENTER}"
+    )
+
+    print(
+        f"  Scale:   {ARCGIS_MAP_SCALE}"
+    )
+
+    print()
+    print(
+        "Excluded by design:"
+    )
+
+    print(
+        "  DateLeft"
+    )
+
+    print(
+        "  Location__slept_"
+    )
+
+    print(
+        "  internal/admin fields"
+    )
+
+    print()
 
 
-# ============================================================
-# GROUP INTO LEGS
-# ============================================================
+# ============================================================================
+# MAIN
+# ============================================================================
 
-def group_into_legs(
-    features,
-):
-    """
-    Groups staging points in process_seq order into:
+def main() -> int:
 
-        via
-        via
-        destination
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate a Public Land Lovers "
+            "trip report from the "
+            "PublicLandLovers_Stops "
+            "Feature Service."
+        )
+    )
 
-    A destination closes the current leg.
+    parser.add_argument(
+        "--inspect",
+        action="store_true",
+        help="Inspect the layer and exit.",
+    )
 
-    A destination with no preceding via points is valid.
+    parser.add_argument(
+        "--pdf",
+        action="store_true",
+        help=(
+            "Generate a PDF in addition "
+            "to HTML."
+        ),
+    )
 
-    A trailing run of via-points with no destination
-    is returned separately and remains unprocessed.
-    """
+    parser.add_argument(
+        "--segment",
+        help=(
+            "Only include one Segment "
+            "value in the report."
+        ),
+    )
 
-    legs = []
+    parser.add_argument(
+        "--state",
+        help=(
+            "Only include one State_1 "
+            "value in the report."
+        ),
+    )
 
-    current_vias = []
+    parser.add_argument(
+        "--start-date",
+        help=(
+            "Only include DateArrived "
+            "on/after YYYY-MM-DD."
+        ),
+    )
+
+    parser.add_argument(
+        "--end-date",
+        help=(
+            "Only include DateArrived "
+            "on/before YYYY-MM-DD."
+        ),
+    )
+
+    parser.add_argument(
+        "--title",
+        help=(
+            "Override the report title."
+        ),
+    )
+
+    parser.add_argument(
+        "--output",
+        default=str(
+            OUTPUT_DIR
+        ),
+        help=(
+            "Output directory."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    # ----------------------------------------------------------------------
+    # OUTPUT
+    # ----------------------------------------------------------------------
+
+    output = Path(
+        args.output
+    )
+
+    output.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    html_path = (
+        output / "index.html"
+    )
+
+    pdf_path = (
+        output
+        / "public_land_lovers_report.pdf"
+    )
+
+    # ----------------------------------------------------------------------
+    # HTTP SESSION
+    # ----------------------------------------------------------------------
+
+    session = requests.Session()
+
+    session.headers.update(
+        {
+            "User-Agent": (
+                "PublicLandLoversTripReport/1.1 "
+                "(https://publiclandlovers.com)"
+            )
+        }
+    )
+
+    # ----------------------------------------------------------------------
+    # LAYER
+    # ----------------------------------------------------------------------
+
+    print(
+        "Reading ArcGIS layer..."
+    )
+
+    layer_info = get_layer_info(
+        session
+    )
+
+    if args.inspect:
+
+        inspect_layer(
+            layer_info
+        )
+
+        return 0
+
+    # ----------------------------------------------------------------------
+    # WHERE
+    # ----------------------------------------------------------------------
+
+    where = build_where(
+        args
+    )
+
+    print(
+        "Query:"
+    )
+
+    print(
+        f"  {where}"
+    )
+
+    # ----------------------------------------------------------------------
+    # STOPS
+    # ----------------------------------------------------------------------
+
+    print(
+        "Downloading stops..."
+    )
+
+    features = query_stops(
+        session,
+        where,
+    )
+
+    print(
+        f"Found {len(features):,} "
+        f"stop records."
+    )
+
+    if not features:
+
+        raise ReportError(
+            "No stops matched the "
+            "selected filters."
+        )
+
+    # ----------------------------------------------------------------------
+    # BUILD STOP OBJECTS
+    # ----------------------------------------------------------------------
+
+    stops: list[Stop] = []
 
     for feature in features:
 
-        role = (
-            feature.attributes.get(
-                "role"
+        attributes = (
+            feature.get(
+                "attributes"
             )
-            or ""
-        ).lower()
+            or {}
+        )
 
-        if role == "via":
+        object_id = attributes.get(
+            "OBJECTID"
+        )
 
-            current_vias.append(
-                feature
-            )
+        if object_id is None:
+            continue
 
-        elif role == "destination":
+        try:
 
-            legs.append(
-                {
-                    "vias": current_vias,
-                    "destination": feature,
-                }
+            object_id = int(
+                object_id
             )
 
-            current_vias = []
-
-        else:
-
-            print(
-                "  Skipping point with "
-                f"unrecognized role={role!r} "
-                f"(OBJECTID "
-                f"{feature.attributes.get('OBJECTID')})"
-            )
-
-    leftover_vias = current_vias
-
-    return (
-        legs,
-        leftover_vias,
-    )
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    print(
-        "=" * 70
-    )
-
-    print(
-        "PROCESS NEW STOPS"
-    )
-
-    print(
-        "=" * 70
-    )
-
-    gis = get_gis()
-
-    points_layer = FeatureLayer(
-        POINTS_LAYER_URL,
-        gis=gis,
-    )
-
-    working_legs_layer = FeatureLayer(
-        WORKING_LEGS_LAYER_URL,
-        gis=gis,
-    )
-
-    production_legs_layer = FeatureLayer(
-        PRODUCTION_LEGS_LAYER_URL,
-        gis=gis,
-    )
-
-    field_input_layer = FeatureLayer(
-        FIELD_INPUT_LAYER_URL,
-        gis=gis,
-    )
-
-    print(
-        "\nAttachment support:"
-    )
-
-    print(
-        "  FIELD INPUT hasAttachments: "
-        f"{field_input_layer.properties.get('hasAttachments')}"
-    )
-
-    print(
-        "  POINTS hasAttachments: "
-        f"{points_layer.properties.get('hasAttachments')}"
-    )
-
-    points_sr = get_layer_spatial_reference(
-        points_layer,
-        "POINTS",
-    )
-
-    working_legs_sr = get_layer_spatial_reference(
-        working_legs_layer,
-        "WORKING LEGS",
-    )
-
-    production_legs_sr = get_layer_spatial_reference(
-        production_legs_layer,
-        "PRODUCTION LEGS",
-    )
-
-    field_input_sr = get_layer_spatial_reference(
-        field_input_layer,
-        "FIELD INPUT",
-    )
-
-    points_wkid = points_sr["wkid"]
-
-    working_legs_wkid = (
-        working_legs_sr["wkid"]
-    )
-
-    production_legs_wkid = (
-        production_legs_sr["wkid"]
-    )
-
-    print_layer_spatial_references(
-        points_layer,
-        working_legs_layer,
-        field_input_layer,
-    )
-
-    print(
-        f"\nInternal routing coordinate system: "
-        f"WGS84 ({WGS84_WKID})"
-    )
-
-    print(
-        f"Destination points will be written "
-        f"using WKID {points_wkid}."
-    )
-
-    print(
-        f"Working leg lines will be written "
-        f"using WKID {working_legs_wkid}."
-    )
-
-    print(
-        f"Production leg lines will be written "
-        f"using WKID {production_legs_wkid}."
-    )
-
-    staged = fetch_unprocessed(
-        field_input_layer
-    )
-
-    print(
-        f"\nFound {len(staged)} "
-        "unprocessed staged point(s)."
-    )
-
-    if not staged:
-
-        print(
-            "Nothing to process."
-        )
-
-        return
-
-    legs, leftover_vias = (
-        group_into_legs(
-            staged
-        )
-    )
-
-    print(
-        f"Grouped into {len(legs)} "
-        "complete leg(s)."
-    )
-
-    if leftover_vias:
-
-        print(
-            f"  {len(leftover_vias)} via-point(s) "
-            "waiting on a destination - "
-            "left unprocessed."
-        )
-
-    if not legs:
-
-        print(
-            "No complete destination legs are ready "
-            "to process."
-        )
-
-        return
-
-    last = get_last_point(
-        points_layer
-    )
-
-    print(
-        f"\nStarting from: "
-        f"{last['name']} "
-        f"(seq {last['seq']})"
-    )
-
-    print(
-        f"  Coordinates: "
-        f"{last['lat']}, {last['lon']}"
-    )
-
-    print(
-        f"  Cumulative miles: "
-        f"{last['cumulative_miles']}"
-    )
-
-    seq_counter = next_seq(
-        points_layer
-    )
-
-    print(
-        f"\nStarting seq counter at: "
-        f"{seq_counter}"
-    )
-
-    for leg_number, leg in enumerate(
-        legs,
-        start=1,
-    ):
-
-        dest = leg["destination"]
-
-        dest_attrs = dest.attributes
-
-        dest_name = (
-            dest_attrs.get("name")
-            or f"Stop (OBJECTID "
-               f"{dest_attrs.get('OBJECTID')})"
-        )
-
-        via_coords = []
-
-        for via in leg["vias"]:
-
-            geometry = via.geometry
-
-            via_lon = geometry["x"]
-
-            via_lat = geometry["y"]
-
-            via_coords.append(
-                (
-                    via_lat,
-                    via_lon,
-                )
-            )
-
-        dest_lat = dest.geometry["y"]
-
-        dest_lon = dest.geometry["x"]
-
-        stop_coords = (
-            [
-                (
-                    last["lat"],
-                    last["lon"],
-                )
-            ]
-
-            + via_coords
-
-            + [
-                (
-                    dest_lat,
-                    dest_lon,
-                )
-            ]
-        )
-
-        stop_labels = (
-            [last["name"]]
-
-            + [
-                (
-                    f"via-point {i + 1} "
-                    f"(process_seq="
-                    f"{v.attributes.get(STAGING_ORDER_FIELD)}, "
-                    f"OBJECTID="
-                    f"{v.attributes.get('OBJECTID')})"
-                )
-
-                for i, v in enumerate(
-                    leg["vias"]
-                )
-            ]
-
-            + [dest_name]
-        )
-
-        print(
-            "\n" + "-" * 70
-        )
-
-        print(
-            f"Leg {leg_number}: "
-            f"{last['name']} -> {dest_name}"
-        )
-
-        print(
-            f"  Destination process_seq: "
-            f"{dest_attrs.get(STAGING_ORDER_FIELD)}"
-        )
-
-        print(
-            f"  Visit date: "
-            f"{dest_attrs.get('visit_date')}"
-        )
-
-        print(
-            f"  {len(via_coords)} via-point(s)"
-        )
-
-        print(
-            f"  Destination WGS84: "
-            f"{dest_lat}, {dest_lon}"
-        )
-
-        # ----------------------------------------------------
-        # SOLVE ROUTE
-        #
-        # The route result now gives us:
-        #     leg_miles
-        #     drive_minutes
-        #     route_geom
-        # ----------------------------------------------------
-
-        (
-            leg_miles,
-            drive_minutes,
-            route_geom,
-        ) = solve_multistop(
-            gis=gis,
-            stop_coords=stop_coords,
-            output_wkid=working_legs_wkid,
-            labels=stop_labels,
-        )
-
-        leg_miles = round(
-            leg_miles,
-            2,
-        )
-
-        drive_minutes = round(
-            drive_minutes,
-            2,
-        )
-
-        new_cumulative = round(
-            last["cumulative_miles"]
-            + leg_miles,
-            2,
-        )
-
-        new_seq = seq_counter
-
-        print(
-            f"  Calculated drive time: "
-            f"{drive_minutes} minutes"
-        )
-
-        date_epoch_ms = dest_attrs.get(
-            "visit_date"
-        )
-
-        if date_epoch_ms is None:
-
-            date_epoch_ms = int(
-                datetime.now(
-                    timezone.utc
-                ).timestamp()
-                * 1000
-            )
-
-            print(
-                f"  WARNING: '{dest_name}' "
-                "has no visit_date. "
-                "Using current date/time."
-            )
-
-        projected_point = project_point(
-            gis=gis,
-            x=dest_lon,
-            y=dest_lat,
-            input_wkid=WGS84_WKID,
-            output_wkid=points_wkid,
-        )
-
-        print(
-            f"  Destination projected: "
-            f"WGS84 -> WKID {points_wkid}"
-        )
-
-        # ----------------------------------------------------
-        # CREATE PRODUCTION DESTINATION POINT
-        # ----------------------------------------------------
-
-        point_feature = {
-            "geometry": projected_point,
-
-            "attributes": {
-                "seq": new_seq,
-
-                "name": dest_name,
-
-                "nameOverride": dest_name,
-
-                "description": (
-                    dest_attrs.get(
-                        "description"
-                    )
-                    or ""
-                ),
-
-                "category": (
-                    dest_attrs.get(
-                        "category"
-                    )
-                    or ""
-                ),
-
-                "type": (
-                    dest_attrs.get(
-                        "type"
-                    )
-                    or ""
-                ),
-
-                POINTS_FIELDS[
-                    "cumulative_miles"
-                ]: new_cumulative,
-
-                POINTS_FIELDS[
-                    "visit_date"
-                ]: date_epoch_ms,
-
-                "Miles_from_previous": leg_miles,
-
-                # Calculated from route service
-                POINTS_FIELDS[
-                    "drive_minutes"
-                ]: drive_minutes,
-
-                # Field input -> production stop
-                POINTS_FIELDS["shower"]:
-                    dest_attrs.get(
-                        "shower"
-                    ),
-
-                POINTS_FIELDS["laundry"]:
-                    dest_attrs.get(
-                        "laundry"
-                    ),
-
-                POINTS_FIELDS["water"]:
-                    dest_attrs.get(
-                        "water"
-                    ),
-
-                POINTS_FIELDS["nights_in_van"]:
-                    dest_attrs.get(
-                        "nights_in_van"
-                    ),
-
-                # Field input -> production stop
-                POINTS_FIELDS["toilet"]:
-                    dest_attrs.get(
-                        "toilet"
-                    ),
-
-                POINTS_FIELDS["segment"]:
-                    dest_attrs.get(
-                        "Segment"
-                    ),
-            },
-        }
-
-        add_result = points_layer.edit_features(
-            adds=[
-                point_feature
-            ]
-        )
-
-        add_results = add_result.get(
-            "addResults",
-            [],
-        )
-
-        if (
-            not add_results
-            or not add_results[0].get(
-                "success"
-            )
+        except (
+            TypeError,
+            ValueError,
         ):
 
-            raise RuntimeError(
-                "Failed to add destination point:\n"
-                f"{add_result}"
-            )
+            continue
 
-        print(
-            f"  Added '{dest_name}' "
-            f"as seq {new_seq}"
-        )
-
-        print(
-            f"  Drive_Minutes: "
-            f"{drive_minutes}"
-        )
-
-        production_oid = (
-            add_results[0].get(
-                "objectId"
-            )
-        )
-
-        if production_oid is None:
-
-            raise RuntimeError(
-                f"Destination '{dest_name}' was added, "
-                "but ArcGIS did not return its production "
-                "OBJECTID; attachments cannot be copied safely."
-            )
-
-        copied_attachment_count = (
-            copy_attachments(
-                source_layer=field_input_layer,
-                source_oid=dest_attrs[
-                    "OBJECTID"
-                ],
-                target_layer=points_layer,
-                target_oid=production_oid,
-                gis=gis,
-            )
-        )
-
-        print(
-            f"  Copied {copied_attachment_count} "
-            "attachment(s) to production "
-            f"OBJECTID {production_oid}."
-        )
-
-        seq_counter += 1
-
-        print(
-            f"  Leg distance: "
-            f"{leg_miles} miles"
-        )
-
-        print(
-            f"  Drive time: "
-            f"{drive_minutes} minutes"
-        )
-
-        print(
-            f"  Cumulative distance: "
-            f"{new_cumulative} miles"
-        )
-
-        # ----------------------------------------------------
-        # CREATE WORKING/CALCULATION LEG
-        # ----------------------------------------------------
-
-        line_feature = {
-            "geometry": route_geom,
-
-            "attributes": {
-                "from_seq": last["seq"],
-
-                "to_seq": new_seq,
-
-                "start_location": last["name"],
-
-                "end_location": dest_name,
-
-                "leg_miles": leg_miles,
-
-                "visit_date": date_epoch_ms,
-
-                # Calculated from route service
-                "Drive_Minutes": drive_minutes,
-
-                "notes": (
-                    dest_attrs.get(
-                        "notes"
-                    )
-                    or ""
+        stops.append(
+            Stop(
+                object_id=object_id,
+                attributes=attributes,
+                geometry=feature.get(
+                    "geometry"
                 ),
-            },
-        }
-
-        line_result = (
-            working_legs_layer.edit_features(
-                adds=[
-                    line_feature
-                ]
+                attachments=[],
             )
         )
 
-        line_results = line_result.get(
-            "addResults",
-            [],
-        )
+    # ----------------------------------------------------------------------
+    # CHRONOLOGICAL ORDER
+    # ----------------------------------------------------------------------
 
-        if (
-            not line_results
-            or not line_results[0].get(
-                "success"
-            )
-        ):
+    stops.sort(
+        key=stop_sort_key
+    )
 
-            raise RuntimeError(
-                "Failed to add leg line to the "
-                "working/calculation layer:\n"
-                f"{line_result}"
-            )
+    # ----------------------------------------------------------------------
+    # ATTACHMENTS
+    # ----------------------------------------------------------------------
 
-        print(
-            f"  Added route line to working layer "
-            f"({len(via_coords)} via-point(s) included)."
-        )
+    print(
+        "Downloading photo "
+        "attachment information..."
+    )
 
-        print(
-            f"  Working leg Drive_Minutes: "
-            f"{drive_minutes}"
-        )
+    attachment_map = query_attachments(
+        session,
+        [
+            stop.object_id
+            for stop in stops
+        ],
+    )
 
-        # ----------------------------------------------------
-        # PREPARE PRODUCTION ROUTE GEOMETRY
-        # ----------------------------------------------------
+    for stop in stops:
 
-        production_geometry = route_geom
-
-        if (
-            working_legs_wkid == 3857
-            and production_legs_wkid == 4326
-        ):
-
-            production_geometry = (
-                web_mercator_to_wgs84_geometry(
-                    route_geom
-                )
-            )
-
-            print(
-                "  Converted final route locally: "
-                "WKID 3857 -> WKID 4326"
-            )
-
-        elif (
-            working_legs_wkid
-            == production_legs_wkid
-        ):
-
-            production_geometry = dict(
-                route_geom
-            )
-
-            production_geometry[
-                "spatialReference"
-            ] = {
-                "wkid": production_legs_wkid
-            }
-
-        else:
-
-            raise RuntimeError(
-                "The working and production legs "
-                "use different coordinate systems "
-                "that this script does not currently "
-                "support for local conversion:\n"
-                f"  Working legs: "
-                f"WKID {working_legs_wkid}\n"
-                f"  Production legs: "
-                f"WKID {production_legs_wkid}\n\n"
-                "Currently supported conversion:\n"
-                "  WKID 3857 -> WKID 4326"
-            )
-
-        # ----------------------------------------------------
-        # CREATE PRODUCTION/PUBLISHED LEG
-        #
-        # Drive_Minutes is included here as well.
-        # ----------------------------------------------------
-
-        production_line_feature = {
-            "geometry": production_geometry,
-
-            "attributes": dict(
-                line_feature["attributes"]
-            ),
-        }
-
-        production_line_result = (
-            production_legs_layer.edit_features(
-                adds=[
-                    production_line_feature
-                ]
-            )
-        )
-
-        production_line_results = (
-            production_line_result.get(
-                "addResults",
+        stop.attachments = (
+            attachment_map.get(
+                stop.object_id,
                 [],
             )
         )
 
-        if (
-            not production_line_results
-            or not production_line_results[0].get(
-                "success"
-            )
-        ):
-
-            raise RuntimeError(
-                "Working route was created, but the final "
-                "route could not be added to the production "
-                "legs layer. Staging records were NOT marked "
-                "processed so this can be retried.\n"
-                f"{production_line_result}"
-            )
-
-        print(
-            f"  Pushed final route to production layer "
-            f"({len(via_coords)} via-point(s) included)."
-        )
-
-        print(
-            f"  Production leg Drive_Minutes: "
-            f"{drive_minutes}"
-        )
-
-        # ----------------------------------------------------
-        # MARK STAGING RECORDS PROCESSED
-        # ----------------------------------------------------
-
-        ids_to_mark = (
-            [
-                v.attributes["OBJECTID"]
-                for v in leg["vias"]
-            ]
-            + [
-                dest_attrs["OBJECTID"]
-            ]
-        )
-
-        updates = [
-            {
-                "attributes": {
-                    "OBJECTID": oid,
-                    "processed": 1,
-                }
-            }
-            for oid in ids_to_mark
-        ]
-
-        update_result = (
-            field_input_layer.edit_features(
-                updates=updates
-            )
-        )
-
-        update_results = update_result.get(
-            "updateResults",
-            [],
-        )
-
-        failed_updates = [
-            r
-            for r in update_results
-            if not r.get("success")
-        ]
-
-        if failed_updates:
-
-            raise RuntimeError(
-                "Some staging points could not "
-                "be marked as processed:\n"
-                f"{failed_updates}"
-            )
-
-        print(
-            f"  Marked {len(ids_to_mark)} "
-            "staged point(s) as processed."
-        )
-
-        # ----------------------------------------------------
-        # UPDATE LAST POINT FOR NEXT LEG
-        # ----------------------------------------------------
-
-        last = {
-            "seq": new_seq,
-
-            "lat": dest_lat,
-
-            "lon": dest_lon,
-
-            "cumulative_miles": (
-                new_cumulative
-            ),
-
-            "name": dest_name,
-        }
-
-    print(
-        "\n" + "=" * 70
+    photo_count = sum(
+        len(stop.attachments)
+        for stop in stops
     )
 
     print(
-        f"Done. Processed {len(legs)} leg(s)."
+        f"Found {photo_count:,} "
+        f"image attachments."
+    )
+
+    # ----------------------------------------------------------------------
+    # BUILD REPORT
+    # ----------------------------------------------------------------------
+
+    print(
+        "Generating HTML..."
+    )
+
+    report = build_report(
+        stops,
+        layer_info,
+        args,
+    )
+
+    html_path.write_text(
+        report,
+        encoding="utf-8",
+    )
+
+    print()
+    print(
+        "HTML created:"
     )
 
     print(
-        "=" * 70
+        f"  {html_path.resolve()}"
     )
 
+    # ----------------------------------------------------------------------
+    # OPTIONAL PDF
+    # ----------------------------------------------------------------------
+
+    if args.pdf:
+
+        print()
+        print(
+            "Generating PDF with "
+            "Chromium..."
+        )
+
+        generate_pdf(
+            html_path,
+            pdf_path,
+        )
+
+        print(
+            "PDF created:"
+        )
+
+        print(
+            f"  {pdf_path.resolve()}"
+        )
+
+    print()
+    print(
+        "Done."
+    )
+
+    return 0
+
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
-    main()
+
+    try:
+
+        raise SystemExit(
+            main()
+        )
+
+    except KeyboardInterrupt:
+
+        print(
+            "\nCancelled."
+        )
+
+        raise SystemExit(
+            130
+        )
+
+    except Exception as exc:
+
+        print()
+        print(
+            "ERROR"
+        )
+        print(
+            "=" * 80
+        )
+        print(
+            exc
+        )
+
+        raise SystemExit(
+            1
+        )
