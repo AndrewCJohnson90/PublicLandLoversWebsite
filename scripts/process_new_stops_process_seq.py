@@ -1,4 +1,3 @@
-
 """
 process_new_stops_process_seq.py
 
@@ -50,6 +49,10 @@ IMPORTANT:
 
     visit_date is retained as the actual date of the destination
     and is written to the real waypoint and leg.
+
+    Drive_Minutes is taken from the ArcGIS route result and
+    represents the routed driving time for the complete leg,
+    including any via points.
 
 A trailing run of via-points with no destination is left
 unprocessed until a destination is added.
@@ -126,6 +129,13 @@ POINTS_FIELDS = {
     "laundry": "laundry",
     "water": "water",
     "nights_in_van": "nights_in_van",
+
+    # Routed driving time from the previous real stop.
+    "drive_minutes": "Drive_Minutes",
+
+    # Additional Field Input -> production stop fields.
+    "toilet": "toilet",
+    "segment": "Segment",
 }
 
 
@@ -920,6 +930,8 @@ def solve_multistop(
 
     Output:
         Route geometry in output_wkid.
+        Total routed miles.
+        Total routed driving minutes.
 
     Stops are sent to the routing service in the exact order
     supplied to this function.
@@ -1084,6 +1096,36 @@ def solve_multistop(
         )
 
     # --------------------------------------------------------
+    # Driving time
+    #
+    # ArcGIS route results normally expose Total_Minutes.
+    #
+    # Keep a fallback for services that expose the value
+    # under Total_TravelTime.
+    # --------------------------------------------------------
+
+    drive_minutes = attrs.get(
+        "Total_Minutes"
+    )
+
+    if drive_minutes is None:
+
+        drive_minutes = attrs.get(
+            "Total_TravelTime"
+        )
+
+    if drive_minutes is None:
+
+        raise RuntimeError(
+            "Could not find driving time in "
+            f"route result:\n{attrs}"
+        )
+
+    drive_minutes = float(
+        drive_minutes
+    )
+
+    # --------------------------------------------------------
     # Geometry
     # --------------------------------------------------------
 
@@ -1101,7 +1143,22 @@ def solve_multistop(
         "wkid": output_wkid
     }
 
-    return miles, geometry
+    print(
+        f"  Route distance: "
+        f"{float(miles):.2f} miles"
+    )
+
+    print(
+        f"  Route driving time: "
+        f"{drive_minutes:.1f} minutes"
+    )
+
+    # Return all three values.
+    return (
+        float(miles),
+        drive_minutes,
+        geometry,
+    )
 
 
 # ============================================================
@@ -1725,9 +1782,18 @@ def main():
 
         # ----------------------------------------------------
         # Solve route
+        #
+        # Returns:
+        #     leg_miles
+        #     drive_minutes
+        #     route_geom
         # ----------------------------------------------------
 
-        leg_miles, route_geom = solve_multistop(
+        (
+            leg_miles,
+            drive_minutes,
+            route_geom,
+        ) = solve_multistop(
             gis=gis,
 
             stop_coords=stop_coords,
@@ -1740,6 +1806,11 @@ def main():
         leg_miles = round(
             leg_miles,
             2,
+        )
+
+        drive_minutes = round(
+            drive_minutes,
+            1,
         )
 
         new_cumulative = round(
@@ -1839,6 +1910,17 @@ def main():
 
                 "Miles_from_previous": leg_miles,
 
+                # ------------------------------------------------
+                # NEW:
+                # ArcGIS route solver driving time for the
+                # complete leg from the previous real waypoint
+                # through any via points to this destination.
+                # ------------------------------------------------
+
+                POINTS_FIELDS[
+                    "drive_minutes"
+                ]: drive_minutes,
+
                 # Field input -> production stop layer
                 POINTS_FIELDS["shower"]:
                     dest_attrs.get(
@@ -1858,6 +1940,20 @@ def main():
                 POINTS_FIELDS["nights_in_van"]:
                     dest_attrs.get(
                         "nights_in_van"
+                    ),
+
+                # ------------------------------------------------
+                # Additional Field Input -> production stop layer
+                # ------------------------------------------------
+
+                POINTS_FIELDS["toilet"]:
+                    dest_attrs.get(
+                        "toilet"
+                    ),
+
+                POINTS_FIELDS["segment"]:
+                    dest_attrs.get(
+                        "Segment"
                     ),
             },
         }
@@ -1938,6 +2034,11 @@ def main():
         )
 
         print(
+            f"  Drive time: "
+            f"{drive_minutes} minutes"
+        )
+
+        print(
             f"  Cumulative distance: "
             f"{new_cumulative} miles"
         )
@@ -1959,6 +2060,11 @@ def main():
                 "end_location": dest_name,
 
                 "leg_miles": leg_miles,
+
+                # NEW:
+                # Same route-solver driving time used on
+                # the destination point.
+                "Drive_Minutes": drive_minutes,
 
                 "visit_date": date_epoch_ms,
 
@@ -2225,4 +2331,3 @@ def main():
 if __name__ == "__main__":
 
     main()
-
