@@ -1131,7 +1131,7 @@ def build_stop_html(
 
     location = clean_text(
         attributes.get(
-            "Location"
+            "name"
         )
     )
 
@@ -1169,7 +1169,7 @@ def build_stop_html(
 
     if location:
         location_parts.append(
-            location
+            name
         )
 
     if state:
@@ -1279,14 +1279,14 @@ def build_stop_html(
     optional = "".join(
         [
             optional_field(
-                "Land ownership",
+                "Land Ownership",
                 attributes.get(
                     "Land_Ownership"
                 ),
             ),
 
             optional_field(
-                "category",
+                "Stop Type",
                 attributes.get(
                     "category"
                 ),
@@ -1300,7 +1300,7 @@ def build_stop_html(
             ),
 
             optional_field(
-                "type",
+                "Type",
                 attributes.get(
                     "type"
                 ),
