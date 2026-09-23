@@ -137,7 +137,7 @@ SECTION_FIELD = "Segment"
 # Location__slept_
 # seq
 # wpt_id
-# category
+
 
 # nameOverride
 # vagueAddress
@@ -1289,13 +1289,6 @@ def build_stop_html(
                 "Stop Type",
                 attributes.get(
                     "category"
-                ),
-            ),
-
-            optional_field(
-                "Camp spot",
-                attributes.get(
-                    "camp_spot"
                 ),
             ),
 
