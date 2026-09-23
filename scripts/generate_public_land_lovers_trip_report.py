@@ -138,7 +138,7 @@ SECTION_FIELD = "Segment"
 # seq
 # wpt_id
 # category
-# type
+
 # nameOverride
 # vagueAddress
 # desc_
@@ -1286,6 +1286,13 @@ def build_stop_html(
             ),
 
             optional_field(
+                "category",
+                attributes.get(
+                    "category"
+                ),
+            ),
+
+            optional_field(
                 "Camp spot",
                 attributes.get(
                     "camp_spot"
@@ -1293,9 +1300,9 @@ def build_stop_html(
             ),
 
             optional_field(
-                "Camp type",
+                "type",
                 attributes.get(
-                    "Camp_spot_type"
+                    "type"
                 ),
             ),
         ]
@@ -2257,7 +2264,8 @@ def inspect_layer(
         "Notes",
         "camp_spot",
         "Land_Ownership",
-        "Camp_spot_type",
+        "category",
+        "type",
     ]:
 
         print(
