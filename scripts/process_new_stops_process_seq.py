@@ -1,5 +1,6 @@
+
 """
-process_new_stops.py
+process_new_stops_process_seq.py
 
 Process new Field Maps staging points into:
     1. Destination points in the real waypoints layer
@@ -35,9 +36,12 @@ Coordinate-system handling:
     - Coordinates are read from Feature Services as WGS 84 (4326).
     - Routing inputs are WGS 84.
     - Route output is requested in the native spatial reference
-      of the legs layer.
+      of the working/calculation legs layer.
     - Destination points are projected into the native spatial
       reference of the points layer before being added.
+    - Production route geometry is locally converted from
+      Web Mercator (3857) to WGS 84 (4326), avoiding the
+      ArcGIS Geometry Service token requirement.
 
 IMPORTANT:
     process_seq controls the order in which NEW staging records
@@ -52,11 +56,12 @@ unprocessed until a destination is added.
 """
 
 import getpass
-import json
+import math
 import os
 import requests
-from datetime import datetime, timezone
 import tempfile
+
+from datetime import datetime, timezone
 from pathlib import Path
 
 from arcgis.gis import GIS
@@ -89,6 +94,7 @@ WORKING_LEGS_LAYER_URL = (
     "arcgis/rest/services/van_life_legs/"
     "FeatureServer/0"
 )
+
 
 # Production/published legs layer.
 # The finalized route is copied here after the working route
@@ -159,20 +165,17 @@ def get_gis():
     Connect to ArcGIS Online.
 
     Priority order:
-        1. AGOL_USERNAME / AGOL_PASSWORD environment variables, if both
-           are set (this is how GitHub Actions / any non-interactive
-           runner logs in — there's no saved profile and nothing to
-           type a password into on a fresh CI machine).
-        2. A saved local profile (interactive local runs, e.g. from
-           your own machine after having logged in once before).
-        3. An interactive password prompt as a last resort, also for
-           local use.
+        1. AGOL_USERNAME / AGOL_PASSWORD environment variables,
+           if both are set.
+        2. A saved local profile.
+        3. An interactive password prompt as a last resort.
     """
 
     env_username = os.environ.get("AGOL_USERNAME")
     env_password = os.environ.get("AGOL_PASSWORD")
 
     if env_username and env_password:
+
         gis = GIS(
             AGOL_URL,
             env_username,
@@ -187,7 +190,10 @@ def get_gis():
         return gis
 
     try:
-        gis = GIS(profile=PROFILE_NAME)
+
+        gis = GIS(
+            profile=PROFILE_NAME
+        )
 
         print(
             f"Logged in via cached profile as "
@@ -222,7 +228,10 @@ def get_gis():
 # SPATIAL REFERENCE HELPERS
 # ============================================================
 
-def get_layer_spatial_reference(layer, layer_name):
+def get_layer_spatial_reference(
+    layer,
+    layer_name,
+):
     """
     Return the layer's native spatial reference.
 
@@ -235,6 +244,7 @@ def get_layer_spatial_reference(layer, layer_name):
     )
 
     if not sr:
+
         raise RuntimeError(
             f"Could not determine spatial reference "
             f"for {layer_name}.\n\n"
@@ -248,6 +258,7 @@ def get_layer_spatial_reference(layer, layer_name):
     )
 
     if not wkid:
+
         raise RuntimeError(
             f"Could not determine WKID for "
             f"{layer_name}.\n"
@@ -289,16 +300,19 @@ def print_layer_spatial_references(
         )
 
         if wkid in (3857, 102100):
+
             print(
                 "       Web Mercator detected."
             )
 
         elif wkid == 4326:
+
             print(
                 "       WGS 84 detected."
             )
 
         else:
+
             print(
                 "       Other coordinate system detected."
             )
@@ -318,9 +332,16 @@ def project_point(
     """
     Project a single point using ArcGIS Online's
     Geometry Service.
+
+    This remains in use for destination point projection.
+
+    Production route reprojection does NOT use this function;
+    the production route is converted locally from Web Mercator
+    to WGS84.
     """
 
     if input_wkid == output_wkid:
+
         return {
             "x": x,
             "y": y,
@@ -330,6 +351,7 @@ def project_point(
         }
 
     try:
+
         geometry_url = (
             gis.properties
             .helperServices
@@ -337,6 +359,7 @@ def project_point(
         )
 
     except Exception as exc:
+
         raise RuntimeError(
             "Could not find the ArcGIS Online "
             "Geometry Service required to project "
@@ -372,6 +395,7 @@ def project_point(
     data = response.json()
 
     if "error" in data:
+
         raise RuntimeError(
             "ArcGIS Geometry Service projection "
             f"failed:\n{data['error']}"
@@ -383,6 +407,7 @@ def project_point(
     )
 
     if not geometries:
+
         raise RuntimeError(
             "Geometry Service returned no "
             "projected geometry."
@@ -400,66 +425,303 @@ def project_point(
 
 
 # ============================================================
+# LOCAL WEB MERCATOR -> WGS84 CONVERSION
+# ============================================================
+
+def web_mercator_to_wgs84_geometry(
+    geometry,
+):
+    """
+    Convert an ArcGIS polyline geometry from Web Mercator
+    (WKID 3857) to WGS84 (WKID 4326).
+
+    This conversion is performed locally and does not call
+    the ArcGIS Geometry Service.
+
+    ArcGIS Web Mercator coordinates:
+
+        x = meters east/west
+        y = meters north/south
+
+    Output:
+
+        x = longitude
+        y = latitude
+
+    The input geometry is not modified.
+    """
+
+    if not geometry:
+
+        raise RuntimeError(
+            "Cannot convert an empty route geometry."
+        )
+
+    paths = geometry.get(
+        "paths"
+    )
+
+    if not paths:
+
+        raise RuntimeError(
+            "Route geometry contains no paths."
+        )
+
+    earth_radius = 6378137.0
+
+    converted_paths = []
+
+    for path in paths:
+
+        converted_path = []
+
+        for point in path:
+
+            if len(point) < 2:
+
+                raise RuntimeError(
+                    f"Invalid route coordinate: {point}"
+                )
+
+            x = float(
+                point[0]
+            )
+
+            y = float(
+                point[1]
+            )
+
+            # ------------------------------------------------
+            # Web Mercator X -> longitude
+            # ------------------------------------------------
+
+            longitude = (
+                x
+                / earth_radius
+                * (180.0 / math.pi)
+            )
+
+            # ------------------------------------------------
+            # Web Mercator Y -> latitude
+            # ------------------------------------------------
+
+            latitude = (
+                (
+                    2.0
+                    * math.atan(
+                        math.exp(
+                            y
+                            / earth_radius
+                        )
+                    )
+                    - math.pi / 2.0
+                )
+                * (180.0 / math.pi)
+            )
+
+            converted_path.append(
+                [
+                    longitude,
+                    latitude,
+                ]
+            )
+
+        converted_paths.append(
+            converted_path
+        )
+
+    return {
+        "paths": converted_paths,
+
+        "spatialReference": {
+            "wkid": WGS84_WKID
+        },
+    }
+
+
+# ============================================================
 # COPY FEATURE ATTACHMENTS
 # ============================================================
 
-def copy_attachments(source_layer, source_oid, target_layer, target_oid, gis):
-    """Copy all Feature Service attachments from staging to production."""
-    source_attachments = source_layer.attachments.get_list(oid=source_oid)
+def copy_attachments(
+    source_layer,
+    source_oid,
+    target_layer,
+    target_oid,
+    gis,
+):
+    """
+    Copy all Feature Service attachments from staging
+    to production.
+    """
+
+    source_attachments = (
+        source_layer.attachments.get_list(
+            oid=source_oid
+        )
+    )
+
     if not source_attachments:
-        print(f"  No attachments found for staging OBJECTID {source_oid}.")
+
+        print(
+            f"  No attachments found for staging "
+            f"OBJECTID {source_oid}."
+        )
+
         return 0
 
-    print(f"  Found {len(source_attachments)} attachment(s) for staging OBJECTID {source_oid}.")
+    print(
+        f"  Found {len(source_attachments)} "
+        f"attachment(s) for staging OBJECTID "
+        f"{source_oid}."
+    )
+
     copied = 0
 
-    with tempfile.TemporaryDirectory(prefix="quickcapture_attachments_") as temp_dir:
+    with tempfile.TemporaryDirectory(
+        prefix="quickcapture_attachments_"
+    ) as temp_dir:
+
         for attachment in source_attachments:
-            attachment_id = attachment.get("id")
-            attachment_name = attachment.get("name") or f"attachment_{attachment_id}"
-            if attachment_id is None:
-                raise RuntimeError(f"Attachment metadata is missing an id: {attachment}")
 
-            url = f"{source_layer.url.rstrip('/')}/{source_oid}/attachments/{attachment_id}"
-            response = requests.get(
-                url,
-                params={"token": gis._con.token, "f": "image"},
-                timeout=120,
+            attachment_id = attachment.get(
+                "id"
             )
-            response.raise_for_status()
 
-            content_type = response.headers.get("Content-Type", "").lower()
-            if "json" in content_type or response.text[:20].strip().startswith("{"):
-                try:
-                    error_data = response.json()
-                except Exception:
-                    error_data = response.text[:500]
+            attachment_name = (
+                attachment.get("name")
+                or f"attachment_{attachment_id}"
+            )
+
+            if attachment_id is None:
+
                 raise RuntimeError(
-                    f"Failed to download attachment {attachment_id} ({attachment_name}) "
-                    f"from staging OBJECTID {source_oid}:\n{error_data}"
+                    "Attachment metadata is missing "
+                    f"an id: {attachment}"
                 )
 
-            safe_name = Path(attachment_name).name
-            local_path = Path(temp_dir) / safe_name
-            if local_path.exists():
-                local_path = Path(temp_dir) / f"{attachment_id}_{safe_name}"
-            local_path.write_bytes(response.content)
+            url = (
+                f"{source_layer.url.rstrip('/')}/"
+                f"{source_oid}/attachments/"
+                f"{attachment_id}"
+            )
 
-            add_result = target_layer.attachments.add(target_oid, str(local_path))
-            if isinstance(add_result, dict):
-                result = add_result.get("addAttachmentResult", add_result)
-                success = result.get("success", False)
+            response = requests.get(
+                url,
+                params={
+                    "token": gis._con.token,
+                    "f": "image",
+                },
+                timeout=120,
+            )
+
+            response.raise_for_status()
+
+            content_type = (
+                response.headers
+                .get(
+                    "Content-Type",
+                    "",
+                )
+                .lower()
+            )
+
+            if (
+                "json" in content_type
+                or response.text[:20]
+                .strip()
+                .startswith("{")
+            ):
+
+                try:
+
+                    error_data = (
+                        response.json()
+                    )
+
+                except Exception:
+
+                    error_data = (
+                        response.text[:500]
+                    )
+
+                raise RuntimeError(
+                    f"Failed to download attachment "
+                    f"{attachment_id} "
+                    f"({attachment_name}) "
+                    f"from staging OBJECTID "
+                    f"{source_oid}:\n"
+                    f"{error_data}"
+                )
+
+            safe_name = Path(
+                attachment_name
+            ).name
+
+            local_path = (
+                Path(temp_dir)
+                / safe_name
+            )
+
+            if local_path.exists():
+
+                local_path = (
+                    Path(temp_dir)
+                    / f"{attachment_id}_{safe_name}"
+                )
+
+            local_path.write_bytes(
+                response.content
+            )
+
+            add_result = (
+                target_layer.attachments.add(
+                    target_oid,
+                    str(local_path),
+                )
+            )
+
+            if isinstance(
+                add_result,
+                dict,
+            ):
+
+                result = (
+                    add_result.get(
+                        "addAttachmentResult",
+                        add_result,
+                    )
+                )
+
+                success = result.get(
+                    "success",
+                    False,
+                )
+
             else:
-                success = bool(add_result)
+
+                success = bool(
+                    add_result
+                )
 
             if not success:
+
                 raise RuntimeError(
-                    f"Failed to add attachment {attachment_id} ({attachment_name}) "
-                    f"to production OBJECTID {target_oid}:\n{add_result}"
+                    f"Failed to add attachment "
+                    f"{attachment_id} "
+                    f"({attachment_name}) "
+                    f"to production OBJECTID "
+                    f"{target_oid}:\n"
+                    f"{add_result}"
                 )
 
             copied += 1
-            print(f"    Copied attachment {copied}/{len(source_attachments)}: {attachment_name}")
+
+            print(
+                f"    Copied attachment "
+                f"{copied}/{len(source_attachments)}: "
+                f"{attachment_name}"
+            )
 
     return copied
 
@@ -468,7 +730,9 @@ def copy_attachments(source_layer, source_oid, target_layer, target_oid, gis):
 # GET LAST REAL WAYPOINT
 # ============================================================
 
-def get_last_point(points_layer):
+def get_last_point(
+    points_layer,
+):
     """
     Get the last real waypoint.
 
@@ -493,6 +757,7 @@ def get_last_point(points_layer):
     )
 
     if not result.features:
+
         raise RuntimeError(
             "Points layer is empty - add at least "
             "one starting point manually first."
@@ -532,7 +797,9 @@ def get_last_point(points_layer):
 # NEXT SEQUENCE NUMBER
 # ============================================================
 
-def next_seq(points_layer):
+def next_seq(
+    points_layer,
+):
     """
     Find the next waypoint sequence number.
     """
@@ -546,6 +813,7 @@ def next_seq(points_layer):
     )
 
     if not result.features:
+
         return 1
 
     sequences = []
@@ -557,12 +825,18 @@ def next_seq(points_layer):
         )
 
         if value is not None:
-            sequences.append(value)
+
+            sequences.append(
+                value
+            )
 
     if not sequences:
+
         return 1
 
-    return max(sequences) + 1
+    return max(
+        sequences
+    ) + 1
 
 
 # ============================================================
@@ -591,21 +865,28 @@ def validate_coords(
                 f"(lat={lat}, lon={lon})"
             )
 
-        elif not (-90 <= lat <= 90):
+        elif not (
+            -90 <= lat <= 90
+        ):
 
             problems.append(
                 f"  {label}: lat={lat} is out of "
                 f"range - did lat/lon get swapped?"
             )
 
-        elif not (-180 <= lon <= 180):
+        elif not (
+            -180 <= lon <= 180
+        ):
 
             problems.append(
                 f"  {label}: lon={lon} is out of "
                 f"range - did lat/lon get swapped?"
             )
 
-        elif lat == 0 and lon == 0:
+        elif (
+            lat == 0
+            and lon == 0
+        ):
 
             problems.append(
                 f"  {label}: coordinates are "
@@ -679,7 +960,9 @@ def solve_multistop(
 
     solve_url = route_url.rstrip("/")
 
-    if not solve_url.endswith("solve"):
+    if not solve_url.endswith(
+        "solve"
+    ):
 
         solve_url += "/solve"
 
@@ -717,7 +1000,8 @@ def solve_multistop(
     }
 
     print(
-        f"  Routing WGS84 -> WKID {output_wkid}"
+        f"  Routing WGS84 -> WKID "
+        f"{output_wkid}"
     )
 
     response = requests.get(
@@ -788,7 +1072,8 @@ def solve_multistop(
         if km is not None:
 
             miles = (
-                km * 0.621371
+                km
+                * 0.621371
             )
 
     if miles is None:
@@ -823,7 +1108,9 @@ def solve_multistop(
 # FETCH UNPROCESSED STAGING POINTS
 # ============================================================
 
-def fetch_unprocessed(field_input_layer):
+def fetch_unprocessed(
+    field_input_layer,
+):
     """
     Fetch all unprocessed staging points.
 
@@ -863,36 +1150,58 @@ def fetch_unprocessed(field_input_layer):
     # --------------------------------------------------------
 
     missing = []
+
     values = []
+
     invalid = []
 
     for feature in features:
 
         attrs = feature.attributes
 
-        object_id = attrs.get("OBJECTID")
+        object_id = attrs.get(
+            "OBJECTID"
+        )
 
         value = attrs.get(
             STAGING_ORDER_FIELD
         )
 
         if value is None:
-            missing.append(object_id)
+
+            missing.append(
+                object_id
+            )
+
             continue
 
         try:
-            numeric_value = float(value)
+
+            numeric_value = float(
+                value
+            )
 
             if numeric_value != numeric_value:
+
                 raise ValueError
 
             values.append(
-                (numeric_value, object_id)
+                (
+                    numeric_value,
+                    object_id,
+                )
             )
 
-        except (TypeError, ValueError):
+        except (
+            TypeError,
+            ValueError,
+        ):
+
             invalid.append(
-                (object_id, value)
+                (
+                    object_id,
+                    value,
+                )
             )
 
     if missing:
@@ -910,7 +1219,8 @@ def fetch_unprocessed(field_input_layer):
         details = "\n".join(
             f"  OBJECTID={oid}: "
             f"{value!r}"
-            for oid, value in invalid
+            for oid, value
+            in invalid
         )
 
         raise RuntimeError(
@@ -931,11 +1241,14 @@ def fetch_unprocessed(field_input_layer):
         seen.setdefault(
             value,
             []
-        ).append(object_id)
+        ).append(
+            object_id
+        )
 
     duplicates = {
         value: object_ids
-        for value, object_ids in seen.items()
+        for value, object_ids
+        in seen.items()
         if len(object_ids) > 1
     }
 
@@ -945,7 +1258,9 @@ def fetch_unprocessed(field_input_layer):
             f"  process_seq={value}: "
             f"OBJECTIDs={object_ids}"
             for value, object_ids
-            in sorted(duplicates.items())
+            in sorted(
+                duplicates.items()
+            )
         )
 
         raise RuntimeError(
@@ -988,7 +1303,9 @@ def fetch_unprocessed(field_input_layer):
 # GROUP INTO LEGS
 # ============================================================
 
-def group_into_legs(features):
+def group_into_legs(
+    features,
+):
     """
     Groups staging points in process_seq order into:
 
@@ -1045,7 +1362,10 @@ def group_into_legs(features):
 
     leftover_vias = current_vias
 
-    return legs, leftover_vias
+    return (
+        legs,
+        leftover_vias,
+    )
 
 
 # ============================================================
@@ -1054,13 +1374,17 @@ def group_into_legs(features):
 
 def main():
 
-    print("=" * 70)
+    print(
+        "=" * 70
+    )
 
     print(
         "PROCESS NEW STOPS"
     )
 
-    print("=" * 70)
+    print(
+        "=" * 70
+    )
 
     # --------------------------------------------------------
     # Connect
@@ -1092,9 +1416,19 @@ def main():
         gis=gis,
     )
 
-    print("\nAttachment support:")
-    print(f"  FIELD INPUT hasAttachments: {field_input_layer.properties.get('hasAttachments')}")
-    print(f"  POINTS hasAttachments: {points_layer.properties.get('hasAttachments')}")
+    print(
+        "\nAttachment support:"
+    )
+
+    print(
+        "  FIELD INPUT hasAttachments: "
+        f"{field_input_layer.properties.get('hasAttachments')}"
+    )
+
+    print(
+        "  POINTS hasAttachments: "
+        f"{points_layer.properties.get('hasAttachments')}"
+    )
 
     # --------------------------------------------------------
     # Spatial references
@@ -1121,8 +1455,14 @@ def main():
     )
 
     points_wkid = points_sr["wkid"]
-    working_legs_wkid = working_legs_sr["wkid"]
-    production_legs_wkid = production_legs_sr["wkid"]
+
+    working_legs_wkid = (
+        working_legs_sr["wkid"]
+    )
+
+    production_legs_wkid = (
+        production_legs_sr["wkid"]
+    )
 
     print_layer_spatial_references(
         points_layer,
@@ -1175,8 +1515,10 @@ def main():
     # Group into legs
     # --------------------------------------------------------
 
-    legs, leftover_vias = group_into_legs(
-        staged
+    legs, leftover_vias = (
+        group_into_legs(
+            staged
+        )
     )
 
     print(
@@ -1191,6 +1533,15 @@ def main():
             "waiting on a destination - "
             "left unprocessed."
         )
+
+    if not legs:
+
+        print(
+            "No complete destination legs are ready "
+            "to process."
+        )
+
+        return
 
     # --------------------------------------------------------
     # Get last real waypoint
@@ -1226,10 +1577,13 @@ def main():
     # duplicate seq values during the run.
     # --------------------------------------------------------
 
-    seq_counter = next_seq(points_layer)
+    seq_counter = next_seq(
+        points_layer
+    )
 
     print(
-        f"\nStarting seq counter at: {seq_counter}"
+        f"\nStarting seq counter at: "
+        f"{seq_counter}"
     )
 
     # ========================================================
@@ -1296,7 +1650,7 @@ def main():
         # Complete ordered stop list
         #
         # IMPORTANT:
-        # This order is now controlled by process_seq.
+        # This order is controlled by process_seq.
         # ----------------------------------------------------
 
         stop_coords = (
@@ -1486,12 +1840,25 @@ def main():
                 "Miles_from_previous": leg_miles,
 
                 # Field input -> production stop layer
-                POINTS_FIELDS["shower"]: dest_attrs.get("shower"),
-                POINTS_FIELDS["laundry"]: dest_attrs.get("laundry"),
-                POINTS_FIELDS["water"]: dest_attrs.get("water"),
-                POINTS_FIELDS["nights_in_van"]: dest_attrs.get(
-                    "nights_in_van"
-                ),
+                POINTS_FIELDS["shower"]:
+                    dest_attrs.get(
+                        "shower"
+                    ),
+
+                POINTS_FIELDS["laundry"]:
+                    dest_attrs.get(
+                        "laundry"
+                    ),
+
+                POINTS_FIELDS["water"]:
+                    dest_attrs.get(
+                        "water"
+                    ),
+
+                POINTS_FIELDS["nights_in_van"]:
+                    dest_attrs.get(
+                        "nights_in_van"
+                    ),
             },
         }
 
@@ -1523,26 +1890,44 @@ def main():
             f"as seq {new_seq}"
         )
 
-        # QuickCapture/Field Maps photos and files are Feature Service
-        # attachments, so they must be copied separately from attributes.
-        production_oid = add_results[0].get("objectId")
+        # ----------------------------------------------------
+        # Copy attachments
+        # ----------------------------------------------------
+
+        production_oid = (
+            add_results[0].get(
+                "objectId"
+            )
+        )
+
         if production_oid is None:
+
             raise RuntimeError(
-                f"Destination '{dest_name}' was added, but ArcGIS did not "
-                "return its production OBJECTID; attachments cannot be copied safely."
+                f"Destination '{dest_name}' was added, "
+                "but ArcGIS did not return its production "
+                "OBJECTID; attachments cannot be copied safely."
             )
 
-        copied_attachment_count = copy_attachments(
-            source_layer=field_input_layer,
-            source_oid=dest_attrs["OBJECTID"],
-            target_layer=points_layer,
-            target_oid=production_oid,
-            gis=gis,
+        copied_attachment_count = (
+            copy_attachments(
+                source_layer=field_input_layer,
+
+                source_oid=dest_attrs[
+                    "OBJECTID"
+                ],
+
+                target_layer=points_layer,
+
+                target_oid=production_oid,
+
+                gis=gis,
+            )
         )
 
         print(
-            f"  Copied {copied_attachment_count} attachment(s) "
-            f"to production OBJECTID {production_oid}."
+            f"  Copied {copied_attachment_count} "
+            "attachment(s) to production "
+            f"OBJECTID {production_oid}."
         )
 
         seq_counter += 1
@@ -1586,14 +1971,16 @@ def main():
             },
         }
 
-        # ========================================================
+        # ====================================================
         # ADD ROUTE LINE TO WORKING/CALCULATION LAYER
-        # ========================================================
+        # ====================================================
 
-        line_result = working_legs_layer.edit_features(
-            adds=[
-                line_feature
-            ]
+        line_result = (
+            working_legs_layer.edit_features(
+                adds=[
+                    line_feature
+                ]
+            )
         )
 
         line_results = line_result.get(
@@ -1619,92 +2006,84 @@ def main():
             f"({len(via_coords)} via-point(s) included)."
         )
 
-        # ========================================================
+        # ====================================================
         # PUSH FINAL ROUTE TO PRODUCTION LEGS LAYER
-        # ========================================================
+        # ====================================================
         #
         # The route was solved in the working layer's native
-        # spatial reference. If the production layer uses a
-        # different WKID, project the completed polyline before
-        # adding it to the production layer.
-        # ========================================================
+        # spatial reference.
+        #
+        # Current production setup:
+        #
+        #     Working = 3857
+        #     Production = 4326
+        #
+        # The previous version called the ArcGIS Geometry
+        # Service here and passed gis._con.token.
+        #
+        # That produced:
+        #
+        #     ERROR 498 - Invalid Token
+        #
+        # The production route is now converted locally.
+        # No Geometry Service call is made.
+        # ====================================================
 
         production_geometry = route_geom
 
-        if working_legs_wkid != production_legs_wkid:
+        if (
+            working_legs_wkid == 3857
+            and production_legs_wkid == 4326
+        ):
 
-            try:
-                geometry_url = (
-                    gis.properties
-                    .helperServices
-                    .geometry.url
+            production_geometry = (
+                web_mercator_to_wgs84_geometry(
+                    route_geom
                 )
-            except Exception as exc:
-                raise RuntimeError(
-                    "Could not find the ArcGIS Online Geometry "
-                    "Service required to project the final route "
-                    f"from WKID {working_legs_wkid} to "
-                    f"WKID {production_legs_wkid}."
-                ) from exc
-
-            projection_params = {
-                "f": "json",
-                "geometries": json.dumps({
-                    "geometryType": "esriGeometryPolyline",
-                    "geometries": [route_geom],
-                }),
-                "inSR": working_legs_wkid,
-                "outSR": production_legs_wkid,
-                "token": gis._con.token,
-            }
-
-            projection_response = requests.get(
-                f"{geometry_url.rstrip('/')}/project",
-                params=projection_params,
-                timeout=60,
             )
-
-            projection_response.raise_for_status()
-
-            projection_data = projection_response.json()
-
-            if "error" in projection_data:
-                raise RuntimeError(
-                    "ArcGIS Geometry Service projection of the "
-                    "production route failed:\n"
-                    f"{projection_data['error']}"
-                )
-
-            projected_geometries = projection_data.get(
-                "geometries",
-                [],
-            )
-
-            if not projected_geometries:
-                raise RuntimeError(
-                    "Geometry Service returned no projected "
-                    "production route geometry."
-                )
-
-            production_geometry = projected_geometries[0]
-
-            production_geometry["spatialReference"] = {
-                "wkid": production_legs_wkid
-            }
 
             print(
-                f"  Projected final route: "
-                f"WKID {working_legs_wkid} -> "
-                f"WKID {production_legs_wkid}"
+                "  Converted final route locally: "
+                "WKID 3857 -> WKID 4326"
             )
 
-        else:
-            production_geometry["spatialReference"] = {
+        elif (
+            working_legs_wkid
+            == production_legs_wkid
+        ):
+
+            production_geometry = dict(
+                route_geom
+            )
+
+            production_geometry[
+                "spatialReference"
+            ] = {
                 "wkid": production_legs_wkid
             }
+
+        else:
+
+            raise RuntimeError(
+                "The working and production legs "
+                "use different coordinate systems "
+                "that this script does not currently "
+                "support for local conversion:\n"
+                f"  Working legs: "
+                f"WKID {working_legs_wkid}\n"
+                f"  Production legs: "
+                f"WKID {production_legs_wkid}\n\n"
+                "Currently supported conversion:\n"
+                "  WKID 3857 -> WKID 4326"
+            )
+
+        # ====================================================
+        # ADD FINAL ROUTE TO PRODUCTION LAYER
+        # ====================================================
 
         production_line_feature = {
             "geometry": production_geometry,
+
             "attributes": dict(
                 line_feature["attributes"]
             ),
@@ -1731,6 +2110,7 @@ def main():
                 "success"
             )
         ):
+
             raise RuntimeError(
                 "Working route was created, but the final "
                 "route could not be added to the production "
@@ -1845,3 +2225,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
