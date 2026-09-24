@@ -42,6 +42,14 @@ Coordinate-system handling:
       Web Mercator (3857) to WGS 84 (4326), avoiding the
       ArcGIS Geometry Service token requirement.
 
+Drive_Minutes:
+    - Calculated from the ArcGIS route result.
+    - Represents the total routed driving time for the completed
+      leg, including any via points.
+    - Written to the destination point.
+    - Written to the working/calculation leg.
+    - Written to the production/published leg.
+
 IMPORTANT:
     process_seq controls the order in which NEW staging records
     are processed. The existing real waypoint layer is still
@@ -49,10 +57,6 @@ IMPORTANT:
 
     visit_date is retained as the actual date of the destination
     and is written to the real waypoint and leg.
-
-    Drive_Minutes is taken from the ArcGIS route result and
-    represents the routed driving time for the complete leg,
-    including any via points.
 
 A trailing run of via-points with no destination is left
 unprocessed until a destination is added.
@@ -130,10 +134,10 @@ POINTS_FIELDS = {
     "water": "water",
     "nights_in_van": "nights_in_van",
 
-    # Routed driving time from the previous real stop.
+    # Calculated from the ArcGIS route result
     "drive_minutes": "Drive_Minutes",
 
-    # Additional Field Input -> production stop fields.
+    # Field input -> production stop layer
     "toilet": "toilet",
     "segment": "Segment",
 }
@@ -294,7 +298,7 @@ def print_layer_spatial_references(
 
     for layer, name in [
         (points_layer, "POINTS"),
-        (legs_layer, "LEGS"),
+        (legs_layer, "WORKING LEGS"),
         (field_input_layer, "FIELD INPUT"),
     ]:
 
@@ -501,19 +505,11 @@ def web_mercator_to_wgs84_geometry(
                 point[1]
             )
 
-            # ------------------------------------------------
-            # Web Mercator X -> longitude
-            # ------------------------------------------------
-
             longitude = (
                 x
                 / earth_radius
                 * (180.0 / math.pi)
             )
-
-            # ------------------------------------------------
-            # Web Mercator Y -> latitude
-            # ------------------------------------------------
 
             latitude = (
                 (
@@ -900,7 +896,7 @@ def validate_coords(
 
             problems.append(
                 f"  {label}: coordinates are "
-                f"exactly (0, 0) - likely failed."
+                "exactly (0, 0) - likely failed."
             )
 
     if problems:
@@ -929,9 +925,15 @@ def solve_multistop(
         WGS84 latitude/longitude.
 
     Output:
-        Route geometry in output_wkid.
-        Total routed miles.
-        Total routed driving minutes.
+        (
+            total_miles,
+            drive_minutes,
+            route_geometry
+        )
+
+    Drive time comes directly from the ArcGIS route
+    result and represents the total travel time for the
+    entire route.
 
     Stops are sent to the routing service in the exact order
     supplied to this function.
@@ -950,10 +952,6 @@ def solve_multistop(
         stop_coords,
         labels,
     )
-
-    # --------------------------------------------------------
-    # Routing service
-    # --------------------------------------------------------
 
     try:
 
@@ -977,14 +975,6 @@ def solve_multistop(
     ):
 
         solve_url += "/solve"
-
-    # --------------------------------------------------------
-    # Stops
-    #
-    # ArcGIS expects:
-    #
-    # longitude,latitude
-    # --------------------------------------------------------
 
     stops = ";".join(
         f"{lon},{lat}"
@@ -1044,10 +1034,6 @@ def solve_multistop(
             f"{coord_dump}"
         )
 
-    # --------------------------------------------------------
-    # Route result
-    # --------------------------------------------------------
-
     features = (
         data
         .get("routes", {})
@@ -1068,7 +1054,7 @@ def solve_multistop(
     )
 
     # --------------------------------------------------------
-    # Distance
+    # DISTANCE
     # --------------------------------------------------------
 
     miles = attrs.get(
@@ -1096,37 +1082,63 @@ def solve_multistop(
         )
 
     # --------------------------------------------------------
-    # Driving time
+    # DRIVING TIME
     #
-    # ArcGIS route results normally expose Total_Minutes.
+    # ArcGIS Network Analyst normally returns
+    # Total_TravelTime in minutes.
     #
-    # Keep a fallback for services that expose the value
-    # under Total_TravelTime.
+    # Total_Minutes is also checked as a fallback in case
+    # the configured route service returns that field.
     # --------------------------------------------------------
 
     drive_minutes = attrs.get(
-        "Total_Minutes"
+        "Total_TravelTime"
     )
 
     if drive_minutes is None:
 
         drive_minutes = attrs.get(
-            "Total_TravelTime"
+            "Total_Minutes"
         )
 
     if drive_minutes is None:
 
         raise RuntimeError(
             "Could not find driving time in "
-            f"route result:\n{attrs}"
+            "route result.\n\n"
+            "Expected 'Total_TravelTime' "
+            "or 'Total_Minutes'.\n\n"
+            f"Route attributes returned:\n{attrs}"
         )
 
-    drive_minutes = float(
-        drive_minutes
+    try:
+
+        drive_minutes = float(
+            drive_minutes
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+
+        raise RuntimeError(
+            "ArcGIS returned an invalid "
+            f"Drive_Minutes value: "
+            f"{drive_minutes!r}\n\n"
+            f"Route attributes:\n{attrs}"
+        ) from exc
+
+    # Keep a useful precision for route calculations.
+    # The value stored in the feature service is rounded
+    # to two decimal places below.
+    drive_minutes = round(
+        drive_minutes,
+        2,
     )
 
     # --------------------------------------------------------
-    # Geometry
+    # GEOMETRY
     # --------------------------------------------------------
 
     geometry = route_feature.get(
@@ -1144,16 +1156,11 @@ def solve_multistop(
     }
 
     print(
-        f"  Route distance: "
-        f"{float(miles):.2f} miles"
+        f"  Route result: "
+        f"{round(float(miles), 2)} miles, "
+        f"{drive_minutes} minutes"
     )
 
-    print(
-        f"  Route driving time: "
-        f"{drive_minutes:.1f} minutes"
-    )
-
-    # Return all three values.
     return (
         float(miles),
         drive_minutes,
@@ -1201,10 +1208,6 @@ def fetch_unprocessed(
     )
 
     features = result.features
-
-    # --------------------------------------------------------
-    # Validate process_seq before doing anything.
-    # --------------------------------------------------------
 
     missing = []
 
@@ -1287,10 +1290,6 @@ def fetch_unprocessed(
             "The field must contain numeric values."
         )
 
-    # --------------------------------------------------------
-    # Reject duplicate process_seq values.
-    # --------------------------------------------------------
-
     seen = {}
 
     for value, object_id in values:
@@ -1327,10 +1326,6 @@ def fetch_unprocessed(
             "unique process_seq so the route order is "
             "unambiguous."
         )
-
-    # --------------------------------------------------------
-    # Print the actual order being used.
-    # --------------------------------------------------------
 
     print(
         f"\nStaging point order "
@@ -1443,15 +1438,7 @@ def main():
         "=" * 70
     )
 
-    # --------------------------------------------------------
-    # Connect
-    # --------------------------------------------------------
-
     gis = get_gis()
-
-    # --------------------------------------------------------
-    # Feature layers
-    # --------------------------------------------------------
 
     points_layer = FeatureLayer(
         POINTS_LAYER_URL,
@@ -1486,10 +1473,6 @@ def main():
         "  POINTS hasAttachments: "
         f"{points_layer.properties.get('hasAttachments')}"
     )
-
-    # --------------------------------------------------------
-    # Spatial references
-    # --------------------------------------------------------
 
     points_sr = get_layer_spatial_reference(
         points_layer,
@@ -1547,10 +1530,6 @@ def main():
         f"using WKID {production_legs_wkid}."
     )
 
-    # --------------------------------------------------------
-    # Fetch staging points
-    # --------------------------------------------------------
-
     staged = fetch_unprocessed(
         field_input_layer
     )
@@ -1567,10 +1546,6 @@ def main():
         )
 
         return
-
-    # --------------------------------------------------------
-    # Group into legs
-    # --------------------------------------------------------
 
     legs, leftover_vias = (
         group_into_legs(
@@ -1600,10 +1575,6 @@ def main():
 
         return
 
-    # --------------------------------------------------------
-    # Get last real waypoint
-    # --------------------------------------------------------
-
     last = get_last_point(
         points_layer
     )
@@ -1624,16 +1595,6 @@ def main():
         f"{last['cumulative_miles']}"
     )
 
-    # --------------------------------------------------------
-    # Track the next seq number locally instead of re-querying
-    # the server every leg.
-    #
-    # AGOL hosted layers can have a brief read-after-write
-    # delay, so a fresh query immediately after an add can
-    # still return the OLD max. Incrementing locally avoids
-    # duplicate seq values during the run.
-    # --------------------------------------------------------
-
     seq_counter = next_seq(
         points_layer
     )
@@ -1642,10 +1603,6 @@ def main():
         f"\nStarting seq counter at: "
         f"{seq_counter}"
     )
-
-    # ========================================================
-    # PROCESS EACH LEG
-    # ========================================================
 
     for leg_number, leg in enumerate(
         legs,
@@ -1656,27 +1613,11 @@ def main():
 
         dest_attrs = dest.attributes
 
-        # ----------------------------------------------------
-        # Destination name
-        # ----------------------------------------------------
-
         dest_name = (
             dest_attrs.get("name")
             or f"Stop (OBJECTID "
                f"{dest_attrs.get('OBJECTID')})"
         )
-
-        # ----------------------------------------------------
-        # Via coordinates
-        #
-        # fetch_unprocessed() explicitly requests WGS84.
-        #
-        # Therefore:
-        #     geometry["x"] = longitude
-        #     geometry["y"] = latitude
-        #
-        # Via points are already in process_seq order.
-        # ----------------------------------------------------
 
         via_coords = []
 
@@ -1695,20 +1636,9 @@ def main():
                 )
             )
 
-        # ----------------------------------------------------
-        # Destination coordinates
-        # ----------------------------------------------------
-
         dest_lat = dest.geometry["y"]
 
         dest_lon = dest.geometry["x"]
-
-        # ----------------------------------------------------
-        # Complete ordered stop list
-        #
-        # IMPORTANT:
-        # This order is controlled by process_seq.
-        # ----------------------------------------------------
 
         stop_coords = (
             [
@@ -1748,10 +1678,6 @@ def main():
             + [dest_name]
         )
 
-        # ----------------------------------------------------
-        # Print leg information
-        # ----------------------------------------------------
-
         print(
             "\n" + "-" * 70
         )
@@ -1781,9 +1707,9 @@ def main():
         )
 
         # ----------------------------------------------------
-        # Solve route
+        # SOLVE ROUTE
         #
-        # Returns:
+        # The route result now gives us:
         #     leg_miles
         #     drive_minutes
         #     route_geom
@@ -1795,11 +1721,8 @@ def main():
             route_geom,
         ) = solve_multistop(
             gis=gis,
-
             stop_coords=stop_coords,
-
             output_wkid=working_legs_wkid,
-
             labels=stop_labels,
         )
 
@@ -1810,7 +1733,7 @@ def main():
 
         drive_minutes = round(
             drive_minutes,
-            1,
+            2,
         )
 
         new_cumulative = round(
@@ -1821,9 +1744,10 @@ def main():
 
         new_seq = seq_counter
 
-        # ----------------------------------------------------
-        # Visit date
-        # ----------------------------------------------------
+        print(
+            f"  Calculated drive time: "
+            f"{drive_minutes} minutes"
+        )
 
         date_epoch_ms = dest_attrs.get(
             "visit_date"
@@ -1844,19 +1768,11 @@ def main():
                 "Using current date/time."
             )
 
-        # ====================================================
-        # PROJECT DESTINATION TO POINTS LAYER
-        # ====================================================
-
         projected_point = project_point(
             gis=gis,
-
             x=dest_lon,
-
             y=dest_lat,
-
             input_wkid=WGS84_WKID,
-
             output_wkid=points_wkid,
         )
 
@@ -1865,9 +1781,9 @@ def main():
             f"WGS84 -> WKID {points_wkid}"
         )
 
-        # ====================================================
-        # ADD DESTINATION POINT
-        # ====================================================
+        # ----------------------------------------------------
+        # CREATE PRODUCTION DESTINATION POINT
+        # ----------------------------------------------------
 
         point_feature = {
             "geometry": projected_point,
@@ -1910,18 +1826,12 @@ def main():
 
                 "Miles_from_previous": leg_miles,
 
-                # ------------------------------------------------
-                # NEW:
-                # ArcGIS route solver driving time for the
-                # complete leg from the previous real waypoint
-                # through any via points to this destination.
-                # ------------------------------------------------
-
+                # Calculated from route service
                 POINTS_FIELDS[
                     "drive_minutes"
                 ]: drive_minutes,
 
-                # Field input -> production stop layer
+                # Field input -> production stop
                 POINTS_FIELDS["shower"]:
                     dest_attrs.get(
                         "shower"
@@ -1942,10 +1852,7 @@ def main():
                         "nights_in_van"
                     ),
 
-                # ------------------------------------------------
-                # Additional Field Input -> production stop layer
-                # ------------------------------------------------
-
+                # Field input -> production stop
                 POINTS_FIELDS["toilet"]:
                     dest_attrs.get(
                         "toilet"
@@ -1986,9 +1893,10 @@ def main():
             f"as seq {new_seq}"
         )
 
-        # ----------------------------------------------------
-        # Copy attachments
-        # ----------------------------------------------------
+        print(
+            f"  Drive_Minutes: "
+            f"{drive_minutes}"
+        )
 
         production_oid = (
             add_results[0].get(
@@ -2007,15 +1915,11 @@ def main():
         copied_attachment_count = (
             copy_attachments(
                 source_layer=field_input_layer,
-
                 source_oid=dest_attrs[
                     "OBJECTID"
                 ],
-
                 target_layer=points_layer,
-
                 target_oid=production_oid,
-
                 gis=gis,
             )
         )
@@ -2043,9 +1947,9 @@ def main():
             f"{new_cumulative} miles"
         )
 
-        # ====================================================
-        # ADD ROUTE LINE
-        # ====================================================
+        # ----------------------------------------------------
+        # CREATE WORKING/CALCULATION LEG
+        # ----------------------------------------------------
 
         line_feature = {
             "geometry": route_geom,
@@ -2061,12 +1965,10 @@ def main():
 
                 "leg_miles": leg_miles,
 
-                # NEW:
-                # Same route-solver driving time used on
-                # the destination point.
-                "Drive_Minutes": drive_minutes,
-
                 "visit_date": date_epoch_ms,
+
+                # Calculated from route service
+                "Drive_Minutes": drive_minutes,
 
                 "notes": (
                     dest_attrs.get(
@@ -2076,10 +1978,6 @@ def main():
                 ),
             },
         }
-
-        # ====================================================
-        # ADD ROUTE LINE TO WORKING/CALCULATION LAYER
-        # ====================================================
 
         line_result = (
             working_legs_layer.edit_features(
@@ -2112,28 +2010,14 @@ def main():
             f"({len(via_coords)} via-point(s) included)."
         )
 
-        # ====================================================
-        # PUSH FINAL ROUTE TO PRODUCTION LEGS LAYER
-        # ====================================================
-        #
-        # The route was solved in the working layer's native
-        # spatial reference.
-        #
-        # Current production setup:
-        #
-        #     Working = 3857
-        #     Production = 4326
-        #
-        # The previous version called the ArcGIS Geometry
-        # Service here and passed gis._con.token.
-        #
-        # That produced:
-        #
-        #     ERROR 498 - Invalid Token
-        #
-        # The production route is now converted locally.
-        # No Geometry Service call is made.
-        # ====================================================
+        print(
+            f"  Working leg Drive_Minutes: "
+            f"{drive_minutes}"
+        )
+
+        # ----------------------------------------------------
+        # PREPARE PRODUCTION ROUTE GEOMETRY
+        # ----------------------------------------------------
 
         production_geometry = route_geom
 
@@ -2183,9 +2067,11 @@ def main():
                 "  WKID 3857 -> WKID 4326"
             )
 
-        # ====================================================
-        # ADD FINAL ROUTE TO PRODUCTION LAYER
-        # ====================================================
+        # ----------------------------------------------------
+        # CREATE PRODUCTION/PUBLISHED LEG
+        #
+        # Drive_Minutes is included here as well.
+        # ----------------------------------------------------
 
         production_line_feature = {
             "geometry": production_geometry,
@@ -2230,16 +2116,20 @@ def main():
             f"({len(via_coords)} via-point(s) included)."
         )
 
-        # ====================================================
-        # MARK STAGING POINTS PROCESSED
-        # ====================================================
+        print(
+            f"  Production leg Drive_Minutes: "
+            f"{drive_minutes}"
+        )
+
+        # ----------------------------------------------------
+        # MARK STAGING RECORDS PROCESSED
+        # ----------------------------------------------------
 
         ids_to_mark = (
             [
                 v.attributes["OBJECTID"]
                 for v in leg["vias"]
             ]
-
             + [
                 dest_attrs["OBJECTID"]
             ]
@@ -2249,11 +2139,9 @@ def main():
             {
                 "attributes": {
                     "OBJECTID": oid,
-
                     "processed": 1,
                 }
             }
-
             for oid in ids_to_mark
         ]
 
@@ -2288,9 +2176,7 @@ def main():
         )
 
         # ----------------------------------------------------
-        # Update last waypoint
-        #
-        # Keep internal coordinates in WGS84.
+        # UPDATE LAST POINT FOR NEXT LEG
         # ----------------------------------------------------
 
         last = {
@@ -2307,10 +2193,6 @@ def main():
             "name": dest_name,
         }
 
-    # ========================================================
-    # COMPLETE
-    # ========================================================
-
     print(
         "\n" + "=" * 70
     )
@@ -2324,10 +2206,5 @@ def main():
     )
 
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
-
 if __name__ == "__main__":
-
     main()
