@@ -5,8 +5,8 @@ name: Process new van life stops
 # you don't want to wait for the scheduled run.
 on:
   schedule:
-    # 13:00 UTC ≈ 6am Pacific / 7am Mountain, adjust to taste.
-    - cron: "0 13 * * *"
+    # 13:00 UTC ≈ 5am Pacific / 7am Mountain, adjust to taste.
+    - cron: "0 12 * * *"
   workflow_dispatch: {}
 
 jobs:
