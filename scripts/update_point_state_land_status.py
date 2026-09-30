@@ -1,117 +1,70 @@
+
 #!/usr/bin/env python3
 """
 update_point_state_land_status.py
 
-Automatically populates State_1 and Land_Ownership for points in an
-existing ArcGIS Online Feature Service.
-
-NO NEW OUTPUT FEATURE SERVICE IS CREATED.
-
-Sources:
-    State:
-        U.S. Census Bureau TIGERweb
-        TIGERweb State_County / States layer
-
-    Surface management:
-        Bureau of Land Management
-        BLM National Surface Management Agency (SMA)
+Updates State_1 and Land_Ownership on the existing Public Land Lovers
+van-life production Feature Service.
 
 Workflow:
-
-    Existing point Feature Service
-            |
-            +--> Census State polygon lookup
-            |       |
-            |       +--> State_1
-            |
-            +--> BLM SMA Identify
-                    |
-                    +--> Land_Ownership
-
-The BLM result represents Surface Management Agency, NOT a definitive
-land-ownership boundary.
-
-Processing behavior:
-    - Only processes points that need enrichment by default.
-    - Existing populated values are preserved unless FORCE_REPROCESS=True.
-    - Updates the existing feature service in batches.
-    - Does not create a new layer.
-    - Produces a CSV-style summary in the console.
-    - Includes retry handling for external services.
-    - Handles failures on individual points without stopping the whole job.
-    - Can be run manually or from GitHub Actions.
-
-Requirements:
-    pip install arcgis requests
+    1. Query existing production points.
+    2. Determine each point's state using Census TIGERweb.
+    3. Determine the land-management category using the BLM National
+       Surface Management Agency (SMA) service.
+    4. Update the existing production Feature Service in place.
+    5. Write a CSV summary of the processing results.
 
 Authentication:
-    Preferred for ArcGIS Online:
-        arcpy / ArcGIS API profile named "van_life_profile"
+    - GitHub Actions:
+        Uses AGOL_USERNAME and AGOL_PASSWORD environment variables.
+    - Local computer:
+        Falls back to the ArcGIS Python API profile
+        "van_life_profile".
 
-    The script uses:
-        GIS(profile=AGOL_PROFILE)
-
-    If your profile has a different name, change AGOL_PROFILE below.
-
+No new Feature Service is created.
 """
 
 import csv
+import logging
 import os
 import sys
 import time
-import logging
-from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from arcgis.gis import GIS
+from arcgis.features import Feature
 
 
-# ============================================================================
+# ============================================================
 # CONFIGURATION
-# ============================================================================
-
-# ---------------------------------------------------------------------------
-# ArcGIS Online
-# ---------------------------------------------------------------------------
+# ============================================================
 
 AGOL_PROFILE = "van_life_profile"
 
-# Existing production point layer.
-POINTS_LAYER_URL = (
-    "https://services8.arcgis.com/"
-    "KzyxLudI6Hn5u85O/arcgis/rest/services/"
-    "Janyne_and_Andrew_VanLife/FeatureServer/0"
+# Existing production points layer
+POINT_LAYER_URL = (
+    "https://services8.arcgis.com/KzyxLudI6Hn5u85O/"
+    "arcgis/rest/services/Janyne_and_Andrew_VanLife/FeatureServer/0"
 )
 
-
-# ---------------------------------------------------------------------------
-# Fields in your existing point layer
-# ---------------------------------------------------------------------------
-
+# Fields in the existing production layer
 OBJECTID_FIELD = "OBJECTID"
-
 STATE_FIELD = "State_1"
-
 LAND_FIELD = "Land_Ownership"
 
 # Optional processing-status field.
 #
-# If this field exists, the script will use it to track processing.
+# If your production layer does not have this field, set:
 #
-# Recommended values:
-#     OK
-#     REVIEW
-#     NO_STATE
-#     NO_LAND_MATCH
-#     ERROR
+#     PROCESS_FIELD = None
 #
-# If you do NOT have this field, set it to None.
 PROCESS_FIELD = "Spatial_Check"
 
 
-# ---------------------------------------------------------------------------
-# Source services
-# ---------------------------------------------------------------------------
+# ============================================================
+# EXTERNAL DATA SOURCES
+# ============================================================
 
 CENSUS_STATE_LAYER_URL = (
     "https://tigerweb.geo.census.gov/arcgis/rest/services/"
@@ -119,61 +72,48 @@ CENSUS_STATE_LAYER_URL = (
 )
 
 BLM_MAPSERVER_URL = (
-    "https://gis.blm.gov/arcgis/rest/services/"
-    "lands/BLM_Natl_SMA_Cached_with_PriUnk/MapServer"
+    "https://gis.blm.gov/arcgis/rest/services/lands/"
+    "BLM_Natl_SMA_Cached_with_PriUnk/MapServer"
 )
 
 BLM_IDENTIFY_URL = f"{BLM_MAPSERVER_URL}/identify"
 
 
-# ---------------------------------------------------------------------------
-# Processing
-# ---------------------------------------------------------------------------
+# ============================================================
+# PROCESSING SETTINGS
+# ============================================================
 
-# False = only process records that need enrichment.
-# True  = recheck every point.
+# False = process only records that have not successfully completed.
+# True  = process every production point.
 FORCE_REPROCESS = False
 
-# Number of ArcGIS Online updates submitted per batch.
-UPDATE_BATCH_SIZE = 100
+# Number of records sent to ArcGIS Online per edit operation.
+UPDATE_BATCH_SIZE = 50
 
-# Number of points retrieved from the production layer at once.
+# Number of records retrieved from the production layer at a time.
 QUERY_BATCH_SIZE = 500
 
-# Maximum number of HTTP retries for external services.
+# HTTP/API retry settings
 MAX_RETRIES = 3
-
-# Seconds between retries.
 RETRY_DELAY = 2
 
-# BLM Identify pixel tolerance.
-#
-# This is NOT a geographic tolerance in feet/meters.
-# It is the Identify tool's screen-pixel tolerance.
-#
-# A value of 1-3 is generally appropriate for a point lookup.
+# BLM Identify settings
 BLM_IDENTIFY_TOLERANCE = 2
-
-# Map display size used by BLM Identify.
 BLM_IMAGE_WIDTH = 512
 BLM_IMAGE_HEIGHT = 512
 
-# Size of the map extent around each point in Web Mercator.
-#
-# 10,000 meters gives the Identify service enough context while remaining
-# relatively local.
+# The Identify operation requires a map extent.
+# 10,000 meters = approximately a 20 km x 20 km extent.
 BLM_IDENTIFY_HALF_SIZE_METERS = 10000
 
-# Timeout for external web requests.
 REQUEST_TIMEOUT = 60
 
-# Output CSV summary.
 SUMMARY_CSV = "state_land_status_update_summary.csv"
 
 
-# ============================================================================
+# ============================================================
 # LOGGING
-# ============================================================================
+# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -183,38 +123,112 @@ logging.basicConfig(
 log = logging.getLogger("state_land_status")
 
 
-# ============================================================================
-# HTTP SESSION
-# ============================================================================
+# ============================================================
+# ARC GIS ONLINE CONNECTION
+# ============================================================
 
-session = requests.Session()
+def connect_to_arcgis() -> GIS:
+    """
+    Connect to ArcGIS Online.
 
-session.headers.update(
-    {
-        "User-Agent": (
-            "PublicLandLovers-GIS-SpatialEnrichment/1.0 "
-            "(ArcGIS Online automated workflow)"
+    GitHub Actions:
+        Uses AGOL_USERNAME and AGOL_PASSWORD environment variables.
+
+    Local execution:
+        Falls back to the configured ArcGIS Python API profile.
+    """
+
+    username = os.getenv("AGOL_USERNAME")
+    password = os.getenv("AGOL_PASSWORD")
+
+    # --------------------------------------------------------
+    # GitHub Actions / environment credentials
+    # --------------------------------------------------------
+
+    if username and password:
+        log.info(
+            "Connecting to ArcGIS Online using environment credentials..."
         )
-    }
-)
+
+        try:
+            gis = GIS(
+                "https://www.arcgis.com",
+                username,
+                password,
+            )
+
+            log.info(
+                "Connected to ArcGIS Online as '%s'.",
+                gis.users.me.username,
+            )
+
+            return gis
+
+        except Exception as exc:
+            log.error(
+                "Could not connect to ArcGIS Online using "
+                "AGOL_USERNAME / AGOL_PASSWORD."
+            )
+            log.error("%s", exc)
+            raise
+
+    # --------------------------------------------------------
+    # Local ArcGIS profile fallback
+    # --------------------------------------------------------
+
+    log.info(
+        "AGOL_USERNAME / AGOL_PASSWORD not found."
+    )
+
+    log.info(
+        "Connecting using local ArcGIS profile '%s'...",
+        AGOL_PROFILE,
+    )
+
+    try:
+        gis = GIS(profile=AGOL_PROFILE)
+
+        log.info(
+            "Connected to ArcGIS Online as '%s'.",
+            gis.users.me.username,
+        )
+
+        return gis
+
+    except Exception as exc:
+        log.error(
+            "Could not connect to ArcGIS Online profile '%s'.",
+            AGOL_PROFILE,
+        )
+        log.error("%s", exc)
+
+        log.error(
+            "For GitHub Actions, make sure AGOL_USERNAME and "
+            "AGOL_PASSWORD are configured as repository secrets."
+        )
+
+        raise
 
 
-# ============================================================================
-# HELPERS
-# ============================================================================
+# ============================================================
+# HTTP REQUEST HELPER
+# ============================================================
 
-def request_json(url, params, description="request"):
+def request_json(
+    url: str,
+    params: Dict,
+    description: str,
+) -> Dict:
     """
-    Perform an HTTP GET and return JSON with retries.
+    Perform a GET request with retry handling.
     """
 
-    last_error = None
+    last_exception = None
 
     for attempt in range(1, MAX_RETRIES + 1):
 
         try:
-
-            response = session.get(
+            response = requests.get(
                 url,
                 params=params,
                 timeout=REQUEST_TIMEOUT,
@@ -224,7 +238,7 @@ def request_json(url, params, description="request"):
 
             data = response.json()
 
-            if isinstance(data, dict) and "error" in data:
+            if isinstance(data, dict) and data.get("error"):
                 raise RuntimeError(
                     f"{description} returned ArcGIS error: "
                     f"{data['error']}"
@@ -234,10 +248,10 @@ def request_json(url, params, description="request"):
 
         except Exception as exc:
 
-            last_error = exc
+            last_exception = exc
 
             log.warning(
-                "%s failed (attempt %s/%s): %s",
+                "%s failed (attempt %d/%d): %s",
                 description,
                 attempt,
                 MAX_RETRIES,
@@ -245,159 +259,95 @@ def request_json(url, params, description="request"):
             )
 
             if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY)
+                time.sleep(RETRY_DELAY * attempt)
 
     raise RuntimeError(
         f"{description} failed after {MAX_RETRIES} attempts: "
-        f"{last_error}"
+        f"{last_exception}"
     )
 
 
-def is_blank(value):
+# ============================================================
+# GEOMETRY HELPERS
+# ============================================================
+
+def get_point_lon_lat(feature) -> Optional[Tuple[float, float]]:
     """
-    Return True if a field is empty/null/whitespace.
-    """
+    Extract longitude/latitude from an ArcGIS Feature.
 
-    if value is None:
-        return True
-
-    if isinstance(value, str):
-        return value.strip() == ""
-
-    return False
-
-
-def clean_string(value):
-    """
-    Convert a value to a clean string.
+    Supports both:
+        - x/y geometry
+        - lon/lat geometry
     """
 
-    if value is None:
+    geometry = feature.geometry
+
+    if not geometry:
         return None
 
-    return str(value).strip()
+    try:
+        x = geometry.get("x")
+        y = geometry.get("y")
+
+        if x is not None and y is not None:
+            return float(x), float(y)
+
+        lon = geometry.get("longitude")
+        lat = geometry.get("latitude")
+
+        if lon is not None and lat is not None:
+            return float(lon), float(lat)
+
+    except Exception:
+        pass
+
+    return None
 
 
-# ============================================================================
-# WEB MERCATOR
-# ============================================================================
-
-def lonlat_to_web_mercator(lon, lat):
+def lonlat_to_web_mercator(
+    lon: float,
+    lat: float,
+) -> Tuple[float, float]:
     """
-    Convert WGS84 longitude/latitude to EPSG:3857.
+    Convert WGS84 longitude/latitude to Web Mercator.
 
-    This avoids requiring arcpy or pyproj just for this transformation.
+    EPSG:4326 -> EPSG:3857
     """
 
     import math
 
+    # Prevent mathematical problems at the poles.
+    lat = max(min(lat, 89.9999), -89.9999)
+
     x = lon * 20037508.34 / 180.0
 
-    y = math.log(
-        math.tan(
-            (90.0 + lat) * math.pi / 360.0
+    y = (
+        math.log(
+            math.tan(
+                (90.0 + lat) * math.pi / 360.0
+            )
         )
-    ) / (math.pi / 180.0)
+        / (math.pi / 180.0)
+    )
 
     y = y * 20037508.34 / 180.0
 
     return x, y
 
 
-# ============================================================================
-# GEOMETRY EXTRACTION
-# ============================================================================
-
-def extract_lon_lat(feature):
-    """
-    Extract longitude/latitude from an ArcGIS feature geometry.
-
-    Supports:
-        - x/y geometry
-        - geographic coordinates
-        - Web Mercator coordinates
-
-    The production layer is expected to be point geometry.
-    """
-
-    geometry = feature.get("geometry")
-
-    if not geometry:
-        return None, None
-
-    x = geometry.get("x")
-    y = geometry.get("y")
-
-    if x is None or y is None:
-        return None, None
-
-    spatial_reference = geometry.get("spatialReference", {})
-
-    wkid = spatial_reference.get("latestWkid")
-
-    if wkid is None:
-        wkid = spatial_reference.get("wkid")
-
-    # WGS84
-    if wkid in (4326, None):
-
-        # If no SR was supplied, assume WGS84.
-        return float(x), float(y)
-
-    # Web Mercator
-    if wkid in (3857, 102100):
-
-        import math
-
-        lon = (
-            float(x)
-            / 20037508.34
-            * 180.0
-        )
-
-        lat = (
-            float(y)
-            / 20037508.34
-            * 180.0
-        )
-
-        lat = (
-            180.0
-            / math.pi
-            * (
-                2.0 * math.atan(
-                    math.exp(
-                        lat * math.pi / 180.0
-                    )
-                )
-                - math.pi / 2.0
-            )
-        )
-
-        return lon, lat
-
-    raise ValueError(
-        f"Unsupported point spatial reference WKID: {wkid}"
-    )
-
-
-# ============================================================================
+# ============================================================
 # CENSUS STATE LOOKUP
-# ============================================================================
+# ============================================================
 
-def lookup_state(lon, lat):
+def lookup_state(
+    lon: float,
+    lat: float,
+) -> Optional[str]:
     """
-    Find the Census state polygon containing the point.
-
-    Returns:
-        {
-            "state": "Utah",
-            "state_abbr": "UT",
-            "geoid": "49"
-        }
-
-    or None if no state is found.
+    Find the state containing the point using Census TIGERweb.
     """
+
+    query_url = f"{CENSUS_STATE_LAYER_URL}/query"
 
     params = {
         "f": "json",
@@ -411,9 +361,9 @@ def lookup_state(lon, lat):
     }
 
     data = request_json(
-        f"{CENSUS_STATE_LAYER_URL}/query",
+        query_url,
         params,
-        description="Census state lookup",
+        "Census state lookup",
     )
 
     features = data.get("features", [])
@@ -423,159 +373,120 @@ def lookup_state(lon, lat):
 
     attributes = features[0].get("attributes", {})
 
-    state_name = (
-        attributes.get("NAME")
-        or attributes.get("BASENAME")
-    )
+    # Prefer the normal state name.
+    state_name = attributes.get("NAME")
 
-    state_abbr = (
-        attributes.get("STUSAB")
-        or attributes.get("STATE")
-    )
+    if state_name:
+        return str(state_name).strip()
 
-    geoid = attributes.get("GEOID")
+    # Fall back to abbreviation.
+    abbreviation = attributes.get("STUSAB")
 
-    if is_blank(state_name):
-        return None
+    if abbreviation:
+        return str(abbreviation).strip()
 
-    return {
-        "state": clean_string(state_name),
-        "state_abbr": clean_string(state_abbr),
-        "geoid": clean_string(geoid),
-    }
+    return None
 
 
-# ============================================================================
-# BLM SMA LOOKUP
-# ============================================================================
+# ============================================================
+# BLM LAND STATUS LOOKUP
+# ============================================================
 
-def build_blm_extent(x_mercator, y_mercator):
+def normalize_land_category(
+    layer_name: str,
+) -> str:
     """
-    Build a small Web Mercator map extent around the point.
+    Convert BLM SMA layer names into a simpler category.
     """
 
-    half = BLM_IDENTIFY_HALF_SIZE_METERS
+    name = (layer_name or "").strip().upper()
 
-    return (
-        f"{x_mercator - half},"
-        f"{y_mercator - half},"
-        f"{x_mercator + half},"
-        f"{y_mercator + half}"
-    )
+    if "BUREAU OF LAND MANAGEMENT" in name:
+        return "BLM"
+
+    if "BLM" in name:
+        return "BLM"
+
+    if "NATIONAL PARK SERVICE" in name:
+        return "NPS"
+
+    if "NPS" in name:
+        return "NPS"
+
+    if "FOREST SERVICE" in name:
+        return "USFS"
+
+    if "USFS" in name:
+        return "USFS"
+
+    if "FISH AND WILDLIFE" in name:
+        return "USFWS"
+
+    if "USFWS" in name:
+        return "USFWS"
+
+    if "BUREAU OF RECLAMATION" in name:
+        return "BOR"
+
+    if "RECLAMATION" in name:
+        return "BOR"
+
+    if "BUREAU OF INDIAN AFFAIRS" in name:
+        return "BIA"
+
+    if "INDIAN AFFAIRS" in name:
+        return "BIA"
+
+    if "DEPARTMENT OF DEFENSE" in name:
+        return "DOD"
+
+    if "DEFENSE" in name:
+        return "DOD"
+
+    if "STATE" in name:
+        return "State"
+
+    if "LOCAL" in name:
+        return "Local"
+
+    if "PRIVATE" in name:
+        return "Private"
+
+    if "UNKNOWN" in name:
+        return "Other Federal"
+
+    if "FEDERAL" in name:
+        return "Other Federal"
+
+    return "Other"
 
 
-def normalize_blm_category(layer_name):
+def lookup_blm_land_status(
+    lon: float,
+    lat: float,
+) -> Optional[str]:
     """
-    Convert BLM layer names to concise values suitable for the
-    Land_Ownership field.
+    Use the BLM National SMA MapServer Identify operation.
 
-    The source service's categories are documented by BLM.
-    """
-
-    if not layer_name:
-        return None
-
-    name = layer_name.strip()
-
-    normalized = name.lower()
-
-    mappings = [
-        (
-            "bureau of land management",
-            "BLM",
-        ),
-        (
-            "national park service",
-            "NPS",
-        ),
-        (
-            "us forest service",
-            "USFS",
-        ),
-        (
-            "us fish and wildlife",
-            "USFWS",
-        ),
-        (
-            "bureau of reclamation",
-            "BOR",
-        ),
-        (
-            "bureau of indian affairs",
-            "BIA",
-        ),
-        (
-            "department of defense",
-            "DOD",
-        ),
-        (
-            "other federal",
-            "Other Federal",
-        ),
-        (
-            "state",
-            "State",
-        ),
-        (
-            "local",
-            "Local",
-        ),
-        (
-            "private or unknown",
-            "Private or Unknown",
-        ),
-        (
-            "alaska native allotment",
-            "Alaska Native Allotment",
-        ),
-        (
-            "alaska native lands",
-            "Alaska Native Lands",
-        ),
-    ]
-
-    for source_text, output_value in mappings:
-
-        if source_text in normalized:
-            return output_value
-
-    # Strip common parenthetical notation if it is an otherwise
-    # recognizable category.
-    return name.replace(" (", " - ").replace(")", "")
-
-
-def lookup_blm_sma(lon, lat):
-    """
-    Use the BLM cached MapServer Identify operation to determine the
-    Surface Management Agency at a point.
-
-    IMPORTANT:
-        This is SMA information, not definitive ownership.
-
-    Returns:
-        {
-            "value": "BLM",
-            "layer_name": "...",
-            "layer_id": 22,
-            "details": {...}
-        }
-
-    or None.
+    Important:
+        This dataset represents Surface Management Agency (SMA),
+        not definitive legal land ownership.
     """
 
-    x_mercator, y_mercator = lonlat_to_web_mercator(
-        lon,
-        lat,
-    )
+    x, y = lonlat_to_web_mercator(lon, lat)
 
-    map_extent = build_blm_extent(
-        x_mercator,
-        y_mercator,
+    half_size = BLM_IDENTIFY_HALF_SIZE_METERS
+
+    map_extent = (
+        f"{x - half_size},"
+        f"{y - half_size},"
+        f"{x + half_size},"
+        f"{y + half_size}"
     )
 
     geometry = (
-        f'{{"x":{x_mercator},'
-        f'"y":{y_mercator},'
+        f'{{"x":{x},'
+        f'"y":{y},'
         f'"spatialReference":{{"wkid":3857}}}}'
     )
 
@@ -584,13 +495,7 @@ def lookup_blm_sma(lon, lat):
         "geometry": geometry,
         "geometryType": "esriGeometryPoint",
         "sr": 3857,
-
-        # FEATURES group layer.
-        #
-        # This allows Identify to inspect the underlying SMA feature
-        # layers rather than just the cached tile image.
         "layers": "all:17",
-
         "tolerance": BLM_IDENTIFY_TOLERANCE,
         "mapExtent": map_extent,
         "imageDisplay": (
@@ -604,7 +509,7 @@ def lookup_blm_sma(lon, lat):
     data = request_json(
         BLM_IDENTIFY_URL,
         params,
-        description="BLM SMA Identify",
+        "BLM SMA Identify",
     )
 
     results = data.get("results", [])
@@ -612,370 +517,309 @@ def lookup_blm_sma(lon, lat):
     if not results:
         return None
 
-    # We want the actual feature layer result, not a group layer.
+    categories = []
+
     for result in results:
 
-        layer_name = result.get("layerName")
+        layer_name = result.get("layerName", "")
 
-        if not layer_name:
-            continue
+        category = normalize_land_category(layer_name)
 
-        value = normalize_blm_category(
-            layer_name
-        )
+        if category not in categories:
+            categories.append(category)
 
-        if value:
-            attributes = result.get(
-                "attributes",
-                {},
-            )
+    if not categories:
+        return None
 
-            return {
-                "value": value,
-                "layer_name": layer_name,
-                "layer_id": result.get("layerId"),
-                "details": attributes,
-            }
-
-    return None
-
-
-# ============================================================================
-# FEATURE QUERY
-# ============================================================================
-
-def get_point_layer(gis):
-    """
-    Get the existing point Feature Layer.
-    """
-
-    from arcgis.features import FeatureLayer
-
-    return FeatureLayer(
-        POINTS_LAYER_URL,
-        gis=gis,
-    )
-
-
-def get_layer_fields(layer):
-    """
-    Return a dictionary of field name -> field definition.
-    """
-
-    properties = layer.properties
-
-    return {
-        field["name"]: field
-        for field in properties.fields
-    }
-
-
-def validate_fields(layer):
-    """
-    Make sure required fields exist before making any updates.
-    """
-
-    fields = get_layer_fields(layer)
-
-    required = [
-        OBJECTID_FIELD,
-        STATE_FIELD,
-        LAND_FIELD,
+    # Prefer a specific agency if multiple results were returned.
+    preferred_order = [
+        "BLM",
+        "NPS",
+        "USFS",
+        "USFWS",
+        "BOR",
+        "BIA",
+        "DOD",
+        "State",
+        "Local",
+        "Private",
+        "Other Federal",
+        "Other",
     ]
 
-    if PROCESS_FIELD:
-        required.append(PROCESS_FIELD)
+    for preferred in preferred_order:
+        if preferred in categories:
+            return preferred
 
-    missing = [
-        field
-        for field in required
-        if field not in fields
-    ]
+    return categories[0]
 
-    if missing:
 
-        raise RuntimeError(
-            "The following fields are missing from the "
-            f"production layer: {', '.join(missing)}\n\n"
-            "Either create these fields or change the "
-            "configuration at the top of this script."
-        )
+# ============================================================
+# QUERY PRODUCTION POINTS
+# ============================================================
+
+def query_production_features(layer):
+    """
+    Retrieve production point features in batches.
+    """
+
+    log.info("Querying existing production points...")
+
+    object_id_field = layer.properties.objectIdField
 
     log.info(
-        "Required fields verified: %s",
-        ", ".join(required),
-    )
-
-
-# ============================================================================
-# DETERMINE WHICH POINTS NEED PROCESSING
-# ============================================================================
-
-def build_where_clause():
-    """
-    Build the WHERE clause used for incremental processing.
-
-    If PROCESS_FIELD exists:
-        Process NULL / blank / error / review records.
-
-    State and land values are also checked later, so the script remains
-    useful even if the processing status field is not present.
-    """
-
-    if FORCE_REPROCESS:
-        return "1=1"
-
-    if PROCESS_FIELD:
-        return (
-            f"({PROCESS_FIELD} IS NULL "
-            f"OR {PROCESS_FIELD} = '' "
-            f"OR {PROCESS_FIELD} = 'ERROR' "
-            f"OR {PROCESS_FIELD} = 'REVIEW' "
-            f"OR {PROCESS_FIELD} = 'NO_STATE' "
-            f"OR {PROCESS_FIELD} = 'NO_LAND_MATCH')"
-        )
-
-    return (
-        f"({STATE_FIELD} IS NULL "
-        f"OR {STATE_FIELD} = '' "
-        f"OR {LAND_FIELD} IS NULL "
-        f"OR {LAND_FIELD} = '')"
-    )
-
-
-def get_features_to_process(layer):
-    """
-    Retrieve all point features needing processing.
-    """
-
-    where = build_where_clause()
-
-    log.info(
-        "Processing WHERE clause: %s",
-        where,
+        "ArcGIS object ID field: %s",
+        object_id_field,
     )
 
     all_features = []
 
-    result_offset = 0
+    offset = 0
 
     while True:
 
         log.info(
-            "Retrieving features %s-%s...",
-            result_offset + 1,
-            result_offset + QUERY_BATCH_SIZE,
+            "Querying production points: offset %d",
+            offset,
         )
 
-        result = layer.query(
-            where=where,
+        feature_set = layer.query(
+            where="1=1",
             out_fields="*",
             return_geometry=True,
-            result_offset=result_offset,
+            result_offset=offset,
             result_record_count=QUERY_BATCH_SIZE,
-            return_exceeded_limit_features=True,
         )
 
-        features = result.features
+        features = feature_set.features
 
         if not features:
             break
 
         all_features.extend(features)
 
+        log.info(
+            "Retrieved %d features (total %d)",
+            len(features),
+            len(all_features),
+        )
+
         if len(features) < QUERY_BATCH_SIZE:
             break
 
-        result_offset += QUERY_BATCH_SIZE
+        offset += len(features)
+
+    log.info(
+        "Total production points retrieved: %d",
+        len(all_features),
+    )
 
     return all_features
 
 
-# ============================================================================
-# PROCESS A SINGLE POINT
-# ============================================================================
+# ============================================================
+# DETERMINE WHETHER A RECORD NEEDS PROCESSING
+# ============================================================
 
-def process_feature(feature):
+def needs_processing(attributes: Dict) -> bool:
     """
-    Process one point.
+    Determine whether a point needs spatial processing.
+    """
 
-    Returns:
-        {
-            "update": {...},
-            "result": {...}
+    if FORCE_REPROCESS:
+        return True
+
+    # --------------------------------------------------------
+    # If a processing-status field exists, use it.
+    # --------------------------------------------------------
+
+    if PROCESS_FIELD:
+        status = attributes.get(PROCESS_FIELD)
+
+        if status is None:
+            return True
+
+        status = str(status).strip().upper()
+
+        successful_statuses = {
+            "OK",
         }
+
+        if status in successful_statuses:
+            return False
+
+        return True
+
+    # --------------------------------------------------------
+    # Otherwise use blank State/Land fields.
+    # --------------------------------------------------------
+
+    state = attributes.get(STATE_FIELD)
+    land = attributes.get(LAND_FIELD)
+
+    state_missing = (
+        state is None
+        or str(state).strip() == ""
+    )
+
+    land_missing = (
+        land is None
+        or str(land).strip() == ""
+    )
+
+    return state_missing or land_missing
+
+
+# ============================================================
+# PROCESS ONE FEATURE
+# ============================================================
+
+def process_feature(feature) -> Dict:
+    """
+    Process one production point and return the attributes
+    that should be updated.
     """
 
     attributes = feature.attributes
 
-    objectid = attributes.get(
-        OBJECTID_FIELD
+    object_id = attributes.get(OBJECTID_FIELD)
+
+    coordinates = get_point_lon_lat(feature)
+
+    if coordinates is None:
+
+        log.warning(
+            "OBJECTID %s has no usable geometry.",
+            object_id,
+        )
+
+        result = {
+            OBJECTID_FIELD: object_id,
+        }
+
+        if PROCESS_FIELD:
+            result[PROCESS_FIELD] = "ERROR"
+
+        return result
+
+    lon, lat = coordinates
+
+    log.info(
+        "OBJECTID %s | %.6f, %.6f",
+        object_id,
+        lon,
+        lat,
     )
+
+    result = {
+        OBJECTID_FIELD: object_id,
+    }
+
+    state = None
+    land = None
+
+    # --------------------------------------------------------
+    # State
+    # --------------------------------------------------------
 
     try:
 
-        lon, lat = extract_lon_lat(
-            feature.as_dict
-        )
-
-        if lon is None or lat is None:
-
-            return {
-                "update": {
-                    OBJECTID_FIELD: objectid,
-                    STATE_FIELD: None,
-                    LAND_FIELD: None,
-                    **(
-                        {PROCESS_FIELD: "ERROR"}
-                        if PROCESS_FIELD
-                        else {}
-                    ),
-                },
-                "result": {
-                    "objectid": objectid,
-                    "status": "ERROR",
-                    "reason": "Missing geometry",
-                    "state": "",
-                    "land": "",
-                },
-            }
-
-        log.info(
-            "OBJECTID %s | %.6f, %.6f",
-            objectid,
+        state = lookup_state(
             lon,
             lat,
         )
 
-        # ---------------------------------------------------------------
-        # State
-        # ---------------------------------------------------------------
-
-        state_result = lookup_state(
-            lon,
-            lat,
-        )
-
-        state_name = None
-
-        if state_result:
-            state_name = state_result["state"]
-
-        # ---------------------------------------------------------------
-        # BLM SMA
-        # ---------------------------------------------------------------
-
-        blm_result = lookup_blm_sma(
-            lon,
-            lat,
-        )
-
-        land_value = None
-
-        if blm_result:
-            land_value = blm_result["value"]
-
-        # ---------------------------------------------------------------
-        # Determine processing status
-        # ---------------------------------------------------------------
-
-        if state_name and land_value:
-
-            status = "OK"
-
-        elif state_name and not land_value:
-
-            status = "NO_LAND_MATCH"
-
-        elif not state_name:
-
-            status = "NO_STATE"
-
-        else:
-
-            status = "REVIEW"
-
-        # ---------------------------------------------------------------
-        # Build update
-        # ---------------------------------------------------------------
-
-        update = {
-            OBJECTID_FIELD: objectid,
-        }
-
-        # Only write a state value if one was actually found.
-        if state_name:
-            update[STATE_FIELD] = state_name
-
-        # Only write a land value if one was actually found.
-        if land_value:
-            update[LAND_FIELD] = land_value
-
-        if PROCESS_FIELD:
-            update[PROCESS_FIELD] = status
-
-        result = {
-            "objectid": objectid,
-            "status": status,
-            "reason": "",
-            "state": state_name or "",
-            "land": land_value or "",
-        }
-
-        return {
-            "update": update,
-            "result": result,
-        }
+        if state:
+            result[STATE_FIELD] = state
 
     except Exception as exc:
 
-        log.exception(
-            "OBJECTID %s failed",
-            objectid,
+        log.error(
+            "OBJECTID %s state lookup failed: %s",
+            object_id,
+            exc,
         )
 
-        update = {
-            OBJECTID_FIELD: objectid,
-        }
+    # --------------------------------------------------------
+    # Land status
+    # --------------------------------------------------------
 
-        if PROCESS_FIELD:
-            update[PROCESS_FIELD] = "ERROR"
+    try:
 
-        return {
-            "update": update,
-            "result": {
-                "objectid": objectid,
-                "status": "ERROR",
-                "reason": str(exc),
-                "state": "",
-                "land": "",
-            },
-        }
+        land = lookup_blm_land_status(
+            lon,
+            lat,
+        )
+
+        if land:
+            result[LAND_FIELD] = land
+
+    except Exception as exc:
+
+        log.error(
+            "OBJECTID %s land lookup failed: %s",
+            object_id,
+            exc,
+        )
+
+    # --------------------------------------------------------
+    # Determine processing status
+    # --------------------------------------------------------
+
+    if state and land:
+        status = "OK"
+
+    elif state and not land:
+        status = "NO_LAND_MATCH"
+
+    elif not state and land:
+        status = "NO_STATE"
+
+    else:
+        status = "REVIEW"
+
+    if PROCESS_FIELD:
+        result[PROCESS_FIELD] = status
+
+    log.info(
+        "OBJECTID %s | State=%s | Land=%s | Status=%s",
+        object_id,
+        state,
+        land,
+        status,
+    )
+
+    return result
 
 
-# ============================================================================
+# ============================================================
 # APPLY UPDATES
-# ============================================================================
+# ============================================================
 
-def apply_updates(layer, updates):
+def apply_updates(
+    layer,
+    updates: List[Dict],
+) -> List[Dict]:
     """
-    Update the existing production Feature Service in batches.
+    Apply updates to the existing Feature Service.
 
-    ArcGIS Python API versions can be picky about the format supplied
-    to edit_features(). Convert each attribute dictionary into an
-    explicit Feature object before submitting the batch.
+    Uses explicit arcgis.features.Feature objects because some
+    ArcGIS Python API versions reject plain dictionaries passed
+    directly to edit_features().
     """
-
-    from arcgis.features import Feature
 
     if not updates:
+        log.info("No updates to apply.")
+
         return []
 
     results = []
 
+    total = len(updates)
+
     for start in range(
         0,
-        len(updates),
+        total,
         UPDATE_BATCH_SIZE,
     ):
 
@@ -983,30 +827,19 @@ def apply_updates(layer, updates):
             start:start + UPDATE_BATCH_SIZE
         ]
 
+        batch_number = (
+            start // UPDATE_BATCH_SIZE
+        ) + 1
+
         log.info(
-            "Updating production layer: %s-%s of %s",
+            "Updating production layer: %d-%d of %d",
             start + 1,
             min(
                 start + len(batch),
-                len(updates),
+                total,
             ),
-            len(updates),
+            total,
         )
-
-        # ---------------------------------------------------------------
-        # Convert our dictionaries into ArcGIS Feature objects.
-        #
-        # Each update dictionary should look like:
-        #
-        # {
-        #     "OBJECTID": 123,
-        #     "State_1": "Utah",
-        #     "Land_Ownership": "BLM",
-        #     "Spatial_Check": "OK"
-        # }
-        #
-        # edit_features() expects the OBJECTID inside the attributes.
-        # ---------------------------------------------------------------
 
         feature_updates = []
 
@@ -1020,10 +853,6 @@ def apply_updates(layer, updates):
                 )
             )
 
-        # ---------------------------------------------------------------
-        # Submit the batch.
-        # ---------------------------------------------------------------
-
         try:
 
             response = layer.edit_features(
@@ -1034,33 +863,22 @@ def apply_updates(layer, updates):
         except Exception as exc:
 
             log.error(
-                "Batch update failed for records %s-%s.",
-                start + 1,
-                min(
-                    start + len(batch),
-                    len(updates),
-                ),
-            )
-
-            log.error(
-                "ArcGIS error: %s",
+                "Batch %d failed: %s",
+                batch_number,
                 exc,
             )
-
-            # -----------------------------------------------------------
-            # If a 100-record batch fails, retry each feature individually.
-            #
-            # This is useful because one bad record or field value should
-            # not prevent the other 99 records from being updated.
-            # -----------------------------------------------------------
 
             log.warning(
                 "Retrying failed batch one feature at a time..."
             )
 
+            # ------------------------------------------------
+            # Individual retry
+            # ------------------------------------------------
+
             for update in batch:
 
-                objectid = update.get(
+                object_id = update.get(
                     OBJECTID_FIELD
                 )
 
@@ -1072,7 +890,9 @@ def apply_updates(layer, updates):
 
                     single_response = (
                         layer.edit_features(
-                            updates=[single_feature],
+                            updates=[
+                                single_feature
+                            ],
                             rollback_on_failure=False,
                         )
                     )
@@ -1093,43 +913,34 @@ def apply_updates(layer, updates):
                         if not result.get("success"):
 
                             log.error(
-                                "Individual update failed: "
-                                "OBJECTID=%s | %s",
-                                objectid,
-                                result.get("error"),
+                                "OBJECTID %s update failed: %s",
+                                object_id,
+                                result,
                             )
 
                     else:
 
                         log.error(
-                            "No update result returned for "
-                            "OBJECTID=%s",
-                            objectid,
+                            "OBJECTID %s returned no update result.",
+                            object_id,
                         )
 
                 except Exception as single_exc:
 
                     log.error(
-                        "Individual update exception: "
-                        "OBJECTID=%s | %s",
-                        objectid,
+                        "OBJECTID %s individual update failed: %s",
+                        object_id,
                         single_exc,
                     )
 
             continue
-
-        # ---------------------------------------------------------------
-        # Normal successful batch.
-        # ---------------------------------------------------------------
 
         update_results = response.get(
             "updateResults",
             [],
         )
 
-        results.extend(
-            update_results
-        )
+        results.extend(update_results)
 
         failures = [
             item
@@ -1137,80 +948,76 @@ def apply_updates(layer, updates):
             if not item.get("success")
         ]
 
-        if failures:
+        for failure in failures:
 
-            for failure in failures:
-
-                log.error(
-                    "ArcGIS update failed: OBJECTID=%s error=%s",
-                    failure.get("objectId"),
-                    failure.get("error"),
-                )
+            log.error(
+                "Update failed: %s",
+                failure,
+            )
 
     return results
-# ============================================================================
-# CSV SUMMARY
-# ============================================================================
 
-def write_summary(results):
-    """
-    Write processing results to CSV.
-    """
 
-    if not results:
-        return
+# ============================================================
+# WRITE CSV SUMMARY
+# ============================================================
+
+def write_summary(
+    records: List[Dict],
+    filename: str,
+):
+    """
+    Write a simple CSV summary of processing results.
+    """
 
     fieldnames = [
-        "objectid",
-        "status",
+        "OBJECTID",
+        "longitude",
+        "latitude",
         "state",
-        "land",
-        "reason",
+        "land_status",
+        "status",
+        "error",
     ]
 
     with open(
-        SUMMARY_CSV,
+        filename,
         "w",
         newline="",
         encoding="utf-8",
-    ) as csvfile:
+    ) as csv_file:
 
         writer = csv.DictWriter(
-            csvfile,
+            csv_file,
             fieldnames=fieldnames,
         )
 
         writer.writeheader()
 
-        writer.writerows(results)
+        for record in records:
+            writer.writerow(record)
 
     log.info(
         "Summary written to %s",
-        SUMMARY_CSV,
+        filename,
     )
 
 
-# ============================================================================
+# ============================================================
 # MAIN
-# ============================================================================
+# ============================================================
 
-def main():
+def main() -> int:
 
-    start_time = datetime.now()
-
-    log.info(
-        "============================================================"
-    )
+    log.info("=" * 60)
     log.info(
         "Public Land Lovers Spatial Attribute Update"
     )
-    log.info(
-        "============================================================"
-    )
+    log.info("=" * 60)
 
     log.info(
         "Existing layer: %s",
-        POINTS_LAYER_URL,
+        POINT_LAYER_URL,
     )
 
     log.info(
@@ -1226,199 +1033,376 @@ def main():
         FORCE_REPROCESS,
     )
 
-    # ---------------------------------------------------------------------
-    # Connect to ArcGIS Online
-    # ---------------------------------------------------------------------
+    # --------------------------------------------------------
+    # Connect
+    # --------------------------------------------------------
+
+    gis = connect_to_arcgis()
+
+    # --------------------------------------------------------
+    # Access production layer
+    # --------------------------------------------------------
 
     log.info(
-        "Connecting to ArcGIS Online profile '%s'...",
-        AGOL_PROFILE,
+        "Opening existing production layer..."
     )
 
-    try:
+    layer = gis.content.get(
+        POINT_LAYER_URL
+    ) if False else None
 
-        gis = GIS(
-            profile=AGOL_PROFILE
-        )
+    # FeatureServer URLs can be passed directly to FeatureLayer.
+    from arcgis.features import FeatureLayer
 
-    except Exception as exc:
-
-        log.error(
-            "Could not connect to ArcGIS Online profile '%s'.",
-            AGOL_PROFILE,
-        )
-
-        log.error(
-            "%s",
-            exc,
-        )
-
-        log.error(
-            "Make sure the ArcGIS Python API is installed and "
-            "the profile exists."
-        )
-
-        sys.exit(1)
+    layer = FeatureLayer(
+        POINT_LAYER_URL,
+        gis=gis,
+    )
 
     log.info(
-        "Connected as: %s",
-        gis.users.me.username,
+        "Connected to production Feature Layer."
     )
 
-    # ---------------------------------------------------------------------
-    # Open production layer
-    # ---------------------------------------------------------------------
+    log.info(
+        "Object ID field: %s",
+        layer.properties.objectIdField,
+    )
 
-    layer = get_point_layer(gis)
+    # --------------------------------------------------------
+    # Verify configured fields
+    # --------------------------------------------------------
 
-    validate_fields(layer)
+    layer_fields = {
+        field["name"]
+        for field in layer.properties.fields
+    }
 
-    # ---------------------------------------------------------------------
-    # Find records needing processing
-    # ---------------------------------------------------------------------
+    required_fields = {
+        OBJECTID_FIELD,
+        STATE_FIELD,
+        LAND_FIELD,
+    }
 
-    features = get_features_to_process(
+    missing_fields = (
+        required_fields - layer_fields
+    )
+
+    if missing_fields:
+
+        log.error(
+            "The following required fields are missing "
+            "from the production layer: %s",
+            ", ".join(sorted(missing_fields)),
+        )
+
+        return 1
+
+    if (
+        PROCESS_FIELD
+        and PROCESS_FIELD not in layer_fields
+    ):
+
+        log.warning(
+            "Processing field '%s' does not exist.",
+            PROCESS_FIELD,
+        )
+
+        log.warning(
+            "Continuing without the processing-status field."
+        )
+
+        # Do not modify the global configuration; simply
+        # treat this run as if the field were disabled.
+        processing_field_available = False
+
+    else:
+
+        processing_field_available = bool(
+            PROCESS_FIELD
+        )
+
+    # --------------------------------------------------------
+    # Query production points
+    # --------------------------------------------------------
+
+    features = query_production_features(
         layer
     )
 
-    total = len(features)
-
-    if total == 0:
+    if not features:
 
         log.info(
-            "No points require spatial enrichment."
+            "No production points found."
         )
 
-        log.info(
-            "Nothing was changed."
-        )
+        return 0
 
-        return
+    # --------------------------------------------------------
+    # Determine records to process
+    # --------------------------------------------------------
+
+    features_to_process = []
+
+    for feature in features:
+
+        attributes = feature.attributes
+
+        if (
+            PROCESS_FIELD
+            and not processing_field_available
+        ):
+
+            # Temporarily use blank State/Land logic.
+            state = attributes.get(
+                STATE_FIELD
+            )
+
+            land = attributes.get(
+                LAND_FIELD
+            )
+
+            state_missing = (
+                state is None
+                or str(state).strip() == ""
+            )
+
+            land_missing = (
+                land is None
+                or str(land).strip() == ""
+            )
+
+            should_process = (
+                FORCE_REPROCESS
+                or state_missing
+                or land_missing
+            )
+
+        else:
+
+            should_process = needs_processing(
+                attributes
+            )
+
+        if should_process:
+            features_to_process.append(
+                feature
+            )
 
     log.info(
-        "Found %s point(s) requiring processing.",
-        total,
+        "Processing %d of %d",
+        len(features_to_process),
+        len(features),
     )
 
-    # ---------------------------------------------------------------------
-    # Process
-    # ---------------------------------------------------------------------
+    if not features_to_process:
+
+        log.info(
+            "No points require processing."
+        )
+
+        log.info(
+            "All existing records are already marked OK."
+        )
+
+        return 0
+
+    # --------------------------------------------------------
+    # Process points
+    # --------------------------------------------------------
 
     updates = []
-    results = []
+
+    summary_records = []
 
     for index, feature in enumerate(
-        features,
+        features_to_process,
         start=1,
     ):
 
         log.info(
-            "------------------------------------------------------------"
-        )
-
-        log.info(
-            "Processing %s of %s",
+            "Processing %d of %d",
             index,
-            total,
+            len(features_to_process),
         )
 
-        processed = process_feature(
+        attributes = feature.attributes
+
+        coordinates = get_point_lon_lat(
             feature
         )
 
-        updates.append(
-            processed["update"]
+        result = process_feature(
+            feature
         )
 
-        results.append(
-            processed["result"]
+        updates.append(result)
+
+        object_id = attributes.get(
+            OBJECTID_FIELD
         )
 
-    # ---------------------------------------------------------------------
+        longitude = None
+        latitude = None
+
+        if coordinates:
+            longitude, latitude = coordinates
+
+        summary_records.append(
+            {
+                "OBJECTID": object_id,
+                "longitude": longitude,
+                "latitude": latitude,
+                "state": result.get(
+                    STATE_FIELD
+                ),
+                "land_status": result.get(
+                    LAND_FIELD
+                ),
+                "status": result.get(
+                    PROCESS_FIELD
+                ) if PROCESS_FIELD
+                else "",
+                "error": "",
+            }
+        )
+
+    # --------------------------------------------------------
     # Update production layer
-    # ---------------------------------------------------------------------
+    # --------------------------------------------------------
 
-    log.info(
-        "============================================================"
-    )
-
+    log.info("=" * 60)
     log.info(
         "Updating existing production layer..."
     )
+    log.info("=" * 60)
 
     update_results = apply_updates(
         layer,
         updates,
     )
 
-    # ---------------------------------------------------------------------
-    # Summary
-    # ---------------------------------------------------------------------
+    # --------------------------------------------------------
+    # Match update responses back to summary
+    # --------------------------------------------------------
 
-    write_summary(results)
+    result_by_id = {}
 
-    counts = {}
+    for result in update_results:
 
-    for result in results:
-
-        status = result["status"]
-
-        counts[status] = (
-            counts.get(status, 0)
-            + 1
+        object_id = result.get(
+            "objectId"
         )
 
-    elapsed = (
-        datetime.now()
-        - start_time
-    )
+        if object_id is not None:
+            result_by_id[object_id] = result
 
-    log.info(
-        "============================================================"
-    )
+    successful = 0
+    failed = 0
 
-    log.info(
-        "PROCESSING COMPLETE"
-    )
+    for record in summary_records:
 
-    log.info(
-        "============================================================"
-    )
+        object_id = record["OBJECTID"]
 
-    log.info(
-        "Points examined: %s",
-        total,
-    )
-
-    log.info(
-        "ArcGIS update responses: %s",
-        len(update_results),
-    )
-
-    for status, count in sorted(
-        counts.items()
-    ):
-
-        log.info(
-            "%-20s %s",
-            status,
-            count,
+        result = result_by_id.get(
+            object_id
         )
 
-    log.info(
-        "Elapsed time: %s",
-        elapsed,
-    )
+        if result:
 
-    log.info(
-        "CSV summary: %s",
+            if result.get("success"):
+                successful += 1
+            else:
+                failed += 1
+
+                record["error"] = str(
+                    result
+                )
+
+        else:
+
+            # If there was no response for this
+            # OBJECTID, count it as failed.
+            failed += 1
+
+            record["error"] = (
+                "No update result returned"
+            )
+
+    # --------------------------------------------------------
+    # Write summary
+    # --------------------------------------------------------
+
+    write_summary(
+        summary_records,
         SUMMARY_CSV,
     )
 
-    log.info(
-        "No output Feature Service was created."
-    )
+    # --------------------------------------------------------
+    # Final report
+    # --------------------------------------------------------
 
+    log.info("=" * 60)
+    log.info(
+        "Spatial attribute update complete."
+    )
+    log.info(
+        "Records requiring processing: %d",
+        len(features_to_process),
+    )
+    log.info(
+        "Successful updates: %d",
+        successful,
+    )
+    log.info(
+        "Failed updates: %d",
+        failed,
+    )
+    log.info(
+        "Summary CSV: %s",
+        SUMMARY_CSV,
+    )
+    log.info("=" * 60)
+
+    # --------------------------------------------------------
+    # GitHub Actions behavior
+    # --------------------------------------------------------
+    #
+    # If every record failed, return a non-zero exit code.
+    # Otherwise allow the workflow to continue.
+    #
+    if successful == 0 and failed > 0:
+        log.error(
+            "No production records were successfully updated."
+        )
+
+        return 1
+
+    return 0
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+
+    except KeyboardInterrupt:
+
+        log.error(
+            "Interrupted by user."
+        )
+
+        sys.exit(130)
+
+    except Exception as exc:
+
+        log.exception(
+            "Fatal error: %s",
+            exc,
+        )
+
+        sys.exit(1)
+
+
